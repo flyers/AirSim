@@ -28,7 +28,6 @@ public:
         enabled_ = enabled;
         report_.initialize(float_precision, is_scientific_notation);
         report_freq_.initialize(DefaultReportFreq);
-        StateReporterWrapper::reset();
     }
 
     void clearReport()
@@ -40,21 +39,34 @@ public:
     //*** Start: UpdatableState implementation ***//
     virtual void reset() override
     {
+        //disable checks for reset/update sequence because
+        //this object may get created but not used
+        clearResetUpdateAsserts();  
+        UpdatableObject::reset();
+
+        last_time_ = clock()->nowNanos();
         clearReport();
         dt_stats_.clear();
         report_freq_.reset();
     }
 
-    virtual void update(real_T dt) override
+    virtual void update() override
     {
+        UpdatableObject::update();
+        
+        TTimeDelta dt = clock()->updateSince(last_time_);
+
         if (enabled_) {
             dt_stats_.insert(dt);
-            report_freq_.update(dt);
+            report_freq_.update();
             is_wait_complete = is_wait_complete || report_freq_.isWaitComplete();
         }
     }
     virtual void reportState(StateReporter& reporter) override
     {
+        //TODO: perhaps we should be using supplied reporter?
+        unused(reporter);
+
         //write dt stats
         report_.writeNameOnly("dt");
         report_.writeValueOnly(dt_stats_.mean());
@@ -109,6 +121,8 @@ private:
     FrequencyLimiter report_freq_;
     bool enabled_;
     bool is_wait_complete = false;
+    TTimePoint last_time_;
+
 };
 
 }} //namespace

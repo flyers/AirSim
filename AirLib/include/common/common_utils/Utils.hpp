@@ -21,28 +21,18 @@
 #include <iostream>
 #include <limits>
 #include <queue>
-#include "Log.hpp"
+#include <bitset>
 #include "type_utils.hpp"
 
 #ifndef _WIN32
 #include <limits.h> // needed for CHAR_BIT used below
 #endif
 
-//Stubs for C++17 optional type
-#if (defined __cplusplus) && (__cplusplus >= 201700L)
-#include <optional>
-#else
-#include "optional.hpp"
-#endif
-
-#if (defined __cplusplus) && (__cplusplus >= 201700L)
-using std::optional;
-#else
-using std::experimental::optional;
-#endif
-
+#ifndef _USE_MATH_DEFINES
 #define _USE_MATH_DEFINES
-#include <cmath>
+#endif
+#include <math.h>
+//#include <cmath>
 
 #ifndef M_PIf
 #define M_PIf static_cast<float>(3.1415926535897932384626433832795028841972)
@@ -79,6 +69,10 @@ static int _vscprintf(const char * format, va_list pargs)
 }
 #endif
 
+// Call this on a function parameter to suppress the unused paramter warning
+template <class T> inline 
+void unused(T const & result) { static_cast<void>(result); }
+
 namespace common_utils {
 
 class Utils {
@@ -89,13 +83,22 @@ private:
     typedef std::stringstream stringstream;
     //this is not required for most compilers
     typedef unsigned int uint;
-    typedef unsigned long ulong;
     template <typename T>
     using time_point = std::chrono::time_point<T>;    
 
 
 public:
- 
+    class Logger {
+    public:
+        virtual void log(int level, const std::string& message)
+        {
+            if (level >= 0)
+                std::cout << message << std::endl;
+            else
+                std::cerr << message << std::endl;
+        }
+    };
+    
     static void enableImmediateConsoleFlush() {
         //disable buffering
         setbuf(stdout, NULL);
@@ -123,42 +126,48 @@ public:
         return static_cast<float>(radians * 180.0f / M_PI);
     }
 
-    static void logMessage(const char* format, ...) {
-        va_list args;
-        va_start(args, format);
-
-        auto size = _vscprintf(format, args) + 1U;
-        std::unique_ptr<char[]> buf(new char[size]);
-
-#ifndef _MSC_VER
-        IGNORE_FORMAT_STRING_ON
-        vsnprintf(buf.get(), size, format, args);
-        IGNORE_FORMAT_STRING_OFF
-#else
-        vsnprintf_s(buf.get(), size, _TRUNCATE, format, args);
-#endif
-        va_end(args);
-
-        Log::getLog()->logMessage(buf.get());
+    static bool startsWith(const string& s, const string& prefix) {
+        return s.size() <= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
     }
 
-    static void logError(const char* format, ...) {
-        va_list args;
-        va_start(args, format);
+    template <template<class, class, class...> class TContainer, typename TKey, typename TVal, typename... Args>
+    static const TVal& findOrDefault(const TContainer<TKey, TVal, Args...>& m, TKey const& key, const TVal& default_val = TVal())
+    {
+        typename TContainer<TKey, TVal, Args...>::const_iterator it = m.find(key);
+        if (it == m.end())
+            return default_val;
+        return it->second;
+    }
 
-        auto size = _vscprintf(format, args) + 1U;
-        std::unique_ptr<char[]> buf(new char[size]);
+    static Logger* getSetLogger(Logger* logger = nullptr)
+    {
+        static Logger logger_default_;
+        static Logger* logger_;
 
-#ifndef _MSC_VER
-        IGNORE_FORMAT_STRING_ON
-        vsnprintf(buf.get(), size, format, args);
-        IGNORE_FORMAT_STRING_OFF
-#else
-        vsnprintf_s(buf.get(), size, _TRUNCATE, format, args);
-#endif
-        va_end(args);
+        if (logger != nullptr)
+            logger_ = logger;
+        else if (logger_ == nullptr)
+            logger_ = &logger_default_;
 
-        Log::getLog()->logError(buf.get());
+        return logger_;
+    }
+
+    static constexpr int kLogLevelInfo = 0;
+    static constexpr int kLogLevelWarn = -1;
+    static constexpr int kLogLevelError = -2;
+    static void log(std::string message, int level = kLogLevelInfo)
+    {
+        if (level >= getSetMinLogLevel())
+            getSetLogger()->log(level, message);
+    }
+    static int getSetMinLogLevel(bool set_or_get = false, 
+        int set_min_log_level = std::numeric_limits<int>::min())
+    {
+        static int min_log_level = std::numeric_limits<int>::min();
+        if (set_or_get)
+            min_log_level = set_min_log_level;
+        
+        return min_log_level;
     }
 
     template <typename T>
@@ -203,6 +212,20 @@ public:
 
         ss << suffix;
         return ss.str();         
+    }
+
+    static std::string getFileExtension(const string& str)
+    {
+        int len = static_cast<int>(str.size());
+        const char* ptr = str.c_str();
+        int i = 0;
+        for (i = len - 1; i >= 0; i--)
+        {
+            if (ptr[i] == '.')
+                break;
+        }
+        if (i < 0) return "";
+        return str.substr(i, len - i);
     }
 
     static string formatNumber(double number, int digits_after_decimal = -1, int digits_before_decimal = -1, bool sign_always = false)
@@ -378,6 +401,14 @@ public:
             & (static_cast<R>(-1) >> ((sizeof(R) * CHAR_BIT) - onecount));
     }
 
+    static void cleanupThread(std::thread& th)
+    {
+        if (th.joinable()) {
+            Utils::log("thread was cleaned up!", kLogLevelWarn);
+            th.detach();
+        }
+    }
+
     static inline int floorToInt(float x)
     {
         return static_cast<int> (std::floor(x));
@@ -452,9 +483,13 @@ public:
         return system_clock::now();
     }
 
-    static string to_string(time_point<system_clock> time)
+    static std::time_t to_time_t(const std::string& str, bool is_dst = false, const std::string& format = "%Y-%m-%d %H:%M:%S")
     {
-        return to_string(time, "%Y-%m-%d-%H-%M-%S");
+        std::tm t;
+        t.tm_isdst = is_dst ? 1 : 0;
+        std::istringstream ss(str);
+        ss >> std::get_time(&t, format.c_str());
+        return mktime(&t);
 
         /* GCC doesn't implement put_time yet
         stringstream ss;
@@ -463,7 +498,15 @@ public:
         */
     }
 
-    static string to_string(time_point<system_clock> time, const char* format)
+    static string to_string(time_t tt, const char* format = "%Y-%m-%d-%H-%M-%S")
+    {
+        char str[1024];
+        if (std::strftime(str, sizeof(str), format, std::localtime(&tt)))
+            return string(str);
+        else return string();
+    }
+
+    static string to_string(time_point<system_clock> time, const char* format = "%Y-%m-%d-%H-%M-%S")
     {
         time_t tt = system_clock::to_time_t(time);
         char str[1024];
@@ -475,24 +518,37 @@ public:
     {
         return to_string(now(), "%Y%m%d%H%M%S");
     }
+    static int to_integer(std::string s)
+    {
+        return atoi(s.c_str());
+    }
     static string getEnv(const string& var)
     {
         char* ptr = std::getenv(var.c_str());
         return ptr ? ptr : "";
     }
 
-    //Unix timestamp
-    static unsigned long getTimeSinceEpochMillis(std::time_t* t = nullptr)
+    static uint64_t getUnixTimeStamp(const std::time_t* t = nullptr)
     {
-        std::time_t st = std::time(t);
-        auto millies = static_cast<std::chrono::milliseconds>(st).count();
-        return static_cast<unsigned long>(millies);
+        //if specific time is not passed then get current time
+        std::time_t st = t == nullptr ? std::time(nullptr) : *t;
+        auto secs = static_cast<std::chrono::seconds>(st).count();
+        return static_cast<uint64_t>(secs);
     }
+
     //high precision time in seconds since epoch
-    static double getTimeSinceEpoch(std::chrono::high_resolution_clock::time_point* t = nullptr)
+    static double getTimeSinceEpochSecs(std::chrono::system_clock::time_point* t = nullptr)
     {
-        using Clock = std::chrono::high_resolution_clock;
+        using Clock = std::chrono::system_clock; //high res clock has epoch since boot instead of since 1970 for VC++
         return std::chrono::duration<double>((t != nullptr ? *t : Clock::now() ).time_since_epoch()).count();
+    }
+    static uint64_t getTimeSinceEpochNanos(std::chrono::system_clock::time_point* t = nullptr)
+    {
+        using Clock = std::chrono::system_clock; //high res clock has epoch since boot instead of since 1970 for VC++
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            (t != nullptr ? *t : Clock::now())
+                .time_since_epoch()).
+            count();  
     }
 
     template<typename T>
@@ -511,6 +567,11 @@ public:
         return empty_vector;
     }
 
+    static const std::string& emptyString()
+    {
+        static std::string empty = "";
+        return empty;
+    }
 
     static constexpr float kelvinToCelcius(float kelvin)
     {
@@ -525,7 +586,7 @@ public:
     //implements relative method - do not use for comparing with zero
     //use this most of the time, tolerance needs to be meaningful in your context
     template<typename TReal>
-    static bool isApproximatelyEqual(TReal a, TReal b, TReal tolerance = std::numeric_limits<TReal>::epsilon())
+    static bool isApproximatelyEqual(TReal a, TReal b, TReal tolerance = epsilon<TReal>())
     {
         TReal diff = std::fabs(a - b);
         if (diff <= tolerance)
@@ -537,10 +598,16 @@ public:
         return false;
     }
 
+    template<typename TReal>
+    static constexpr TReal epsilon()
+    {
+        return std::numeric_limits<TReal>::epsilon();
+    }
+
     //supply tolerance that is meaningful in your context
     //for example, default tolerance may not work if you are comparing double with float
     template<typename TReal>
-    static bool isApproximatelyZero(TReal a, TReal tolerance = std::numeric_limits<TReal>::epsilon())
+    static bool isApproximatelyZero(TReal a, TReal tolerance = epsilon<TReal>())
     {
         if (std::fabs(a) <= tolerance)
             return true;
@@ -551,7 +618,7 @@ public:
     //use this when you want to be on safe side
     //for example, don't start rover unless signal is above 1
     template<typename TReal>
-    static bool isDefinitelyLessThan(TReal a, TReal b, TReal tolerance = std::numeric_limits<TReal>::epsilon())
+    static bool isDefinitelyLessThan(TReal a, TReal b, TReal tolerance = epsilon<TReal>())
     {
         TReal diff = a - b;
         if (diff < tolerance)
@@ -563,7 +630,7 @@ public:
         return false;
     }
     template<typename TReal>
-    static bool isDefinitelyGreaterThan(TReal a, TReal b, TReal tolerance = std::numeric_limits<TReal>::epsilon())
+    static bool isDefinitelyGreaterThan(TReal a, TReal b, TReal tolerance = epsilon<TReal>())
     {
         TReal diff = a - b;
         if (diff > tolerance)
@@ -597,6 +664,59 @@ public:
 #endif
     }
 
+    //convert strongly typed enum to underlying scaler types
+    template <typename E>
+    static constexpr typename std::underlying_type<E>::type toNumeric(E e) {
+        return static_cast<typename std::underlying_type<E>::type>(e);
+    }
+    template <typename E>
+    static constexpr E toEnum(typename std::underlying_type<E>::type u) {
+        return static_cast<E>(u);
+    }
+
+    // check whether machine is little endian
+    static bool isLittleEndian()
+    {
+        int intval = 1;
+        unsigned char *uval = reinterpret_cast<unsigned char *>(&intval);
+        return uval[0] == 1;
+    }
+
+    static void writePfmFile(const float * const image_data, int width, int height, std::string path, float scalef=1)
+    {
+        std::fstream file(path.c_str(), std::ios::out | std::ios::binary);
+
+        std::string bands;
+        float fvalue;       // scale factor and temp value to hold pixel value
+        bands = "Pf";       // grayscale
+
+        // sign of scalefact indicates endianness, see pfm specs
+        if(isLittleEndian())
+            scalef = -scalef;
+
+        // insert header information 
+        file << bands   << "\n";
+        file << width   << " ";
+        file << height  << "\n";
+        file << scalef  << "\n";
+
+        if(bands == "Pf"){          // handle 1-band image 
+            for (int i=0; i < height; i++) {
+                for(int j=0; j < width; ++j){
+                    fvalue = image_data[i * width + j];
+                    file.write(reinterpret_cast<char *>(&fvalue), sizeof(fvalue));
+                }
+            }
+        }
+    }
+
+    template<typename T>
+    static std::string toBinaryString(const T& x)
+    {
+        std::stringstream ss;
+        ss << std::bitset<sizeof(T) * 8>(x);
+        return ss.str();
+    }
 };
 
 } //namespace

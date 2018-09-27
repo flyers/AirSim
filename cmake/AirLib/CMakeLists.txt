@@ -1,21 +1,12 @@
-﻿cmake_minimum_required(VERSION 3.2.2)
+﻿cmake_minimum_required(VERSION 3.5.0)
 project(AirLib)
 
 LIST(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/../cmake-modules") 
 INCLUDE("${CMAKE_CURRENT_LIST_DIR}/../cmake-modules/CommonSetup.cmake")
 CommonSetup()
 
-## System dependencies are found with CMake's conventions
-find_package(Eigen3 3 REQUIRED)
-include_directories(${EIGEN3_INCLUDE_DIR})
+IncludeEigen()
 
-###########
-## Build ##
-###########
-
-## Specify additional locations of header files
-## Your package locations should be listed before other locations
-# include_directories(include)
 include_directories(
   ${AIRSIM_ROOT}/AirLib/
   ${AIRSIM_ROOT}/AirLib/include
@@ -23,20 +14,19 @@ include_directories(
   ${RPC_LIB_INCLUDES}
 )
 
-add_library(AirLib STATIC
-  ${AIRSIM_ROOT}/AirLib/src/controllers/DroneControllerBase.cpp
-  ${AIRSIM_ROOT}/AirLib/src/controllers/MavLinkDroneController.cpp
-  ${AIRSIM_ROOT}/AirLib/src/controllers/Settings.cpp  
-  ${AIRSIM_ROOT}/AirLib/src/controllers/FileSystem.cpp  
-  ${AIRSIM_ROOT}/AirLib/src/controllers/Log.cpp  
-  ${AIRSIM_ROOT}/AirLib/src/safety/ObstacleMap.cpp
-  ${AIRSIM_ROOT}/AirLib/src/safety/SafetyEval.cpp
-  ${AIRSIM_ROOT}/AirLib/src/rpc/RpcLibClient.cpp
-  ${AIRSIM_ROOT}/AirLib/src/rpc/RpcLibServer.cpp
-			)
+file(GLOB_RECURSE ${PROJECT_NAME}_sources 
+  ${AIRSIM_ROOT}/${PROJECT_NAME}/src/api/*.cpp
+  ${AIRSIM_ROOT}/${PROJECT_NAME}/src/common/common_utils/*.cpp
+  ${AIRSIM_ROOT}/${PROJECT_NAME}/src/safety/*.cpp
+  ${AIRSIM_ROOT}/${PROJECT_NAME}/src/vehicles/car/api/*.cpp
+  ${AIRSIM_ROOT}/${PROJECT_NAME}/src/vehicles/multirotor/api/*.cpp
+)
 
-## Add these to your app that links this library:			
+add_library(${PROJECT_NAME} STATIC ${${PROJECT_NAME}_sources})
+
+CommonTargetLink()
 target_link_libraries(${PROJECT_NAME} ${RPC_LIB})
+target_link_libraries(${PROJECT_NAME} MavLinkCom)
 
 #string(SUBSTRING ${CMAKE_STATIC_LINKER_FLAGS} 9 -1 "BUILD_PLATFORM")
 #find_package(Threads REQUIRED)

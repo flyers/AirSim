@@ -1,85 +1,94 @@
 #pragma once
 
-#include "VehiclePawnBase.h"
+#include "CoreMinimal.h"
+#include "PawnSimApi.h"
 #include "PIPCamera.h"
 #include "GameFramework/Actor.h"
+#include "ManualPoseController.h"
+#include "common/common_utils/Utils.hpp"
+#include "GameFramework/SpringArmComponent.h"
 #include "CameraDirector.generated.h"
 
 
 UENUM(BlueprintType)
 enum class ECameraDirectorMode : uint8
 {
-    CAMERA_DIRECTOR_MODE_FPV = 1	UMETA(DisplayName="FPV"),
-    CAMERA_DIRECTOR_MODE_GROUND_OBSERVER = 2	UMETA(DisplayName="GroundObserver"),
-    CAMERA_DIRECTOR_MODE_FLY_WITH_ME = 3	UMETA(DisplayName="FlyWithMe"),
-    CAMERA_DIRECTOR_MODE_MANUAL = 4	UMETA(DisplayName="Manual")
+    CAMERA_DIRECTOR_MODE_FPV = 1	UMETA(DisplayName = "FPV"),
+    CAMERA_DIRECTOR_MODE_GROUND_OBSERVER = 2	UMETA(DisplayName = "GroundObserver"),
+    CAMERA_DIRECTOR_MODE_FLY_WITH_ME = 3	UMETA(DisplayName = "FlyWithMe"),
+    CAMERA_DIRECTOR_MODE_MANUAL = 4	UMETA(DisplayName = "Manual"),
+    CAMERA_DIRECTOR_MODE_SPRINGARM_CHASE = 5	UMETA(DisplayName = "SpringArmChase"),
+    CAMERA_DIRECTOR_MODE_BACKUP = 6     UMETA(DisplayName = "Backup"),
+    CAMERA_DIRECTOR_MODE_NODISPLAY = 7      UMETA(DisplayName = "No Display"),
+	CAMERA_DIRECTOR_MODE_FRONT = 8	UMETA(DisplayName = "Front")
 };
 
 UCLASS()
 class AIRSIM_API ACameraDirector : public AActor
 {
     GENERATED_BODY()
-    
+
 public:
-    //below should be set by SimMode BP
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pawn")
-    AVehiclePawnBase* TargetPawn;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pawn")
+    /** Spring arm that will offset the camera */
+    UPROPERTY(Category = Camera, VisibleDefaultsOnly, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+     USpringArmComponent* SpringArm;
+    
+    UPROPERTY(Category = Camera, VisibleDefaultsOnly, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
     APIPCamera* ExternalCamera;
 
-    UFUNCTION(BlueprintImplementableEvent, meta = (DisplayName = "InputEventFpvView"))
-    void InputEventFpvView();
-    UFUNCTION(BlueprintImplementableEvent, meta = (DisplayName = "InputEventGroundView"))
-    void InputEventGroundView();
-    UFUNCTION(BlueprintImplementableEvent, meta = (DisplayName = "InputEventManualView"))
-    void InputEventManualView();
-    UFUNCTION(BlueprintImplementableEvent, meta = (DisplayName = "InputEventFlyWithView"))
-    void InputEventFlyWithView();
+public:
+    void inputEventFpvView();
+    void inputEventGroundView();
+    void inputEventManualView();
+    void inputEventFlyWithView();
+    void inputEventSpringArmChaseView();
+    void inputEventBackupView();
+    void inputEventNoDisplayView();
+	void inputEventFrontView();
 
-    UFUNCTION(BlueprintCallable, Category = "PIP")
-    bool togglePIPScene();
-    UFUNCTION(BlueprintCallable, Category = "PIP")
-    bool togglePIPDepth();
-    UFUNCTION(BlueprintCallable, Category = "PIP")
-    bool togglePIPSeg();
-    UFUNCTION(BlueprintCallable, Category = "PIP")
-    bool togglePIPAll();
-
-    UFUNCTION(BlueprintCallable, Category = "PIP")
-    APIPCamera* getCamera(int id = 0);
-
-public:	
+public:
     ACameraDirector();
     virtual void BeginPlay() override;
-    virtual void Tick( float DeltaSeconds ) override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+    virtual void Tick(float DeltaSeconds) override;
 
     UFUNCTION(BlueprintCallable, Category = "Modes")
-    ECameraDirectorMode getMode();
+        ECameraDirectorMode getMode();
     UFUNCTION(BlueprintCallable, Category = "Modes")
-    void setMode(ECameraDirectorMode mode);
+        void setMode(ECameraDirectorMode mode);
+
+    void initializeForBeginPlay(ECameraDirectorMode view_mode,
+        AActor* follow_actor, APIPCamera* fpv_camera, APIPCamera* front_camera, APIPCamera* back_camera);
+
+    APIPCamera* getFpvCamera() const;
+    APIPCamera* getExternalCamera() const;
+    APIPCamera* getBackupCamera() const;
+    void setFollowDistance(const int follow_distance) { this->follow_distance_ = follow_distance; }
+    void setCameraRotationLagEnabled(const bool lag_enabled) { this->camera_rotation_lag_enabled_ = lag_enabled; }
 
 private:
-    void setupInputBindings();	
-    bool checkCameraRefs();
-    void enableManualBindings(bool enable);
-
-    void inputManualLeft(float val);
-    void inputManualRight(float val);
-    void inputManualForward(float val);
-    void inputManualBackward(float val);
-    void inputManualMoveUp(float val);
-    void inputManualDown(float val);
-    void inputManualLeftYaw(float val);
-    void inputManualUpPitch(float val);
-    void inputManualRightYaw(float val);
-    void inputManualDownPitch(float val);
+    void setupInputBindings();
+    void attachSpringArm(bool attach);
+    void disableCameras(bool fpv, bool backup, bool external, bool front);
 
 private:
+    typedef common_utils::Utils Utils;
+
+
+    APIPCamera* fpv_camera_;
+    APIPCamera* backup_camera_;
+	APIPCamera* front_camera_;
+    AActor* follow_actor_;
+
+    USceneComponent* last_parent_ = nullptr;
+
     ECameraDirectorMode mode_;
-    FInputAxisBinding *left_binding_, *right_binding_, *up_binding_, *down_binding_;
-    FInputAxisBinding *forward_binding_, *backward_binding_, *left_yaw_binding_, *up_pitch_binding_;
-    FInputAxisBinding *right_yaw_binding_, *down_pitch_binding_;
+    UPROPERTY() UManualPoseController* manual_pose_controller_;
 
-    FVector camera_location_manual_;
-    FRotator camera_rotation_manual_;
+    FVector camera_start_location_;
+    FVector initial_ground_obs_offset_;
+    FRotator camera_start_rotation_;
+    bool ext_obs_fixed_z_;
+    int follow_distance_;
+    bool camera_rotation_lag_enabled_;
 };

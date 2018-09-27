@@ -1,7 +1,10 @@
-#include "AirSim.h"
-#include "SimJoyStick/SimJoyStick.h"
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
-DEFINE_LOG_CATEGORY(LogAirSim);
+#include "AirSim.h"
+#include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
+#include "Modules/ModuleInterface.h"
 
 class FAirSim : public IModuleInterface
 {
@@ -11,23 +14,13 @@ class FAirSim : public IModuleInterface
 
 IMPLEMENT_MODULE(FAirSim, AirSim)
 
-void *xinput_dllHandle;
-
 void FAirSim::StartupModule()
 {
-//load xinput DLL
-#if defined _WIN32 || defined _WIN64
-    FString filePath = *FPaths::GamePluginsDir() + FString("AirSim/Dependencies/x360ce/xinput9_1_0.dll");
-    xinput_dllHandle = FPlatformProcess::GetDllHandle(*filePath); // Retrieve the DLL.
-    SimJoyStick::setInitializedSuccess(xinput_dllHandle != NULL);
-#endif
+    //plugin startup
+    UE_LOG(LogTemp, Log, TEXT("StartupModule: AirSim plugin"));
 }
 
 void FAirSim::ShutdownModule()
 {
-#if defined _WIN32 || defined _WIN64
-    SimJoyStick::setInitializedSuccess(false);
-    FPlatformProcess::FreeDllHandle(xinput_dllHandle);
-    xinput_dllHandle = NULL;
-#endif
+    //plugin shutdown
 }

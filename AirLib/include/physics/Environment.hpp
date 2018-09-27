@@ -15,9 +15,8 @@ class Environment : public UpdatableObject {
 public:
     struct State {
         //these fields must be set at initialization time
-        GeoPoint geo_point;
-        real_T min_z_over_ground;
         Vector3r position;
+        GeoPoint geo_point;
 
         //these fields are computed
         Vector3r gravity;
@@ -27,8 +26,8 @@ public:
 
         State()
         {}
-        State(const Vector3r& position_val, const GeoPoint& geo_point_val, real_T min_z_over_ground_val)
-            : geo_point(geo_point_val), min_z_over_ground(min_z_over_ground_val), position(position_val)
+        State(const Vector3r& position_val, const GeoPoint& geo_point_val)
+            : position(position_val), geo_point(geo_point_val)
         {
         }
     };
@@ -45,13 +44,21 @@ public:
     {
         initial_ = initial;
 
-        home_geo_point_ = EarthUtils::HomeGeoPoint(initial_.geo_point);
+        setHomeGeoPoint(initial_.geo_point);
 
-        updateState(initial_, 0.0f, home_geo_point_);
-
-        Environment::reset();
+        updateState(initial_, home_geo_point_);
     }
     
+    void setHomeGeoPoint(const GeoPoint& home_geo_point)
+    {
+        home_geo_point_ = HomeGeoPoint(home_geo_point);
+    }
+
+    GeoPoint getHomeGeoPoint() const
+    {
+        return home_geo_point_.home_geo_point;
+    }
+
     //in local NED coordinates
     void setPosition(const Vector3r& position)
     {
@@ -77,17 +84,15 @@ public:
         current_ = initial_;
     }
 
-    virtual void update(real_T dt)
+    virtual void update()
     {
-        updateState(current_, dt, home_geo_point_);
+        updateState(current_, home_geo_point_);
     }
     //*** End: UpdatableState implementation ***//
 
 private:
-    static void updateState(State& state, real_T dt, const EarthUtils::HomeGeoPoint& home_geo_point)
+    static void updateState(State& state, const HomeGeoPoint& home_geo_point)
     {
-        dt; // avoid warning: unused parameter
-
         state.geo_point = EarthUtils::nedToGeodetic(state.position, home_geo_point);
 
         real_T geo_pot = EarthUtils::getGeopotential(state.geo_point.altitude / 1000.0f);
@@ -101,7 +106,7 @@ private:
 
 private:
     State initial_, current_;
-    EarthUtils::HomeGeoPoint home_geo_point_;
+    HomeGeoPoint home_geo_point_;
 };
 
 }} //namespace

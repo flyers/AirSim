@@ -1,7 +1,6 @@
 # Modern C++ Coding Guidelines
 
-We are using Modern C++ 11 and we are limiting use of C++ 14 to specific parts of the code for now.
-Smart pointers, Lamdas, and C++ 11 multithreading primitives are your friend.
+We are using Modern C++11. Smart pointers, Lambdas, and C++11 multithreading primitives are your friend.
 
 ## Quick Note
 
@@ -75,7 +74,7 @@ When overriding virtual method, use override suffix.
 
 ## Pointers
 
-This is really about memory management.  A simulator has much performance cricial code, so we try and avoid overloading the memory manager
+This is really about memory management.  A simulator has much performance critical code, so we try and avoid overloading the memory manager
 with lots of calls to new/delete.  We also want to avoid too much copying of things on the stack, so we pass things by reference when ever possible.
 But when the object really needs to live longer than the call stack you often need to allocate that object on
 the heap, and so you have a pointer.  Now, if management of the lifetime of that object is going to be tricky we recommend using 

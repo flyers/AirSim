@@ -19,6 +19,14 @@ namespace msr { namespace airlib {
     set the sensor in good-to-use state by call to reset.
 */
 class SensorBase : public UpdatableObject  {
+public:
+    enum class SensorType : uint {
+        Barometer = 1,
+        Imu = 2,
+        Gps = 3,
+        Magnetometer = 4,
+        Distance = 5
+    };
 protected:
     struct GroundTruth {
         const Kinematics::State* kinematics;
@@ -29,8 +37,6 @@ public:
     {
         ground_truth_.kinematics = kinematics;
         ground_truth_.environment = environment;
-
-        reset();
     }
 
     const GroundTruth& getGroundTruth() const

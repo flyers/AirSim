@@ -3,23 +3,22 @@
 
 //in header only mode, control library is not available
 #ifndef AIRLIB_HEADER_ONLY
-//if using Unreal Build system then include precompiled header file first
-#ifdef AIRLIB_PCH
-#include "AirSim.h"
-#endif
 
 #include "safety/SafetyEval.hpp"
+#include "vehicles/multirotor/api/MultirotorCommon.hpp"
 
 #include <cmath>
 #include <sstream>
 
 namespace msr { namespace airlib {
 
+//TODO: something defines max macro which interfears with code here
+#undef max
 
-SafetyEval::SafetyEval(VehicleParams vehicle_params, shared_ptr<IGeoFence> fence_ptr, shared_ptr<ObstacleMap> obs_xy_ptr)
+SafetyEval::SafetyEval(MultirotorApiParams vehicle_params, shared_ptr<IGeoFence> fence_ptr, shared_ptr<ObstacleMap> obs_xy_ptr)
     : vehicle_params_(vehicle_params), fence_ptr_(fence_ptr), obs_xy_ptr_(obs_xy_ptr)
 { 
-    Utils::logMessage("enable_reasons: %X, obs_strategy=%X", uint(enable_reasons_), uint(obs_strategy_));
+    Utils::log(Utils::stringf("enable_reasons: %X, obs_strategy=%X", uint(enable_reasons_), uint(obs_strategy_)));
 }
 
 void SafetyEval::checkFence(const Vector3r& dest_pos, const Vector3r& cur_pos, SafetyEval::EvalResult& appendToResult)
@@ -120,7 +119,7 @@ void SafetyEval::isSafeDestination(const Vector3r& dest_pos, const Vector3r& cur
 
         //less risk distance is better
         result.dest_risk_dist = cur_dest_norm + adjustClearanceForPrStl(vehicle_params_.obs_clearance, result.dest_obs.confidence) - result.dest_obs.distance;
-        if (result.dest_risk_dist >= 0) { //potential collison
+        if (result.dest_risk_dist >= 0) { //potential collision
             //check obstacles around current position and see if it has lower risk
             isCurrentSafer(result);
         }
@@ -132,18 +131,18 @@ void SafetyEval::isSafeDestination(const Vector3r& dest_pos, const Vector3r& cur
         //look for each surrounding tick to see if we have obstacle free angle
         setSuggestedVelocity(result, quaternion);
 
-        Utils::logMessage("isSafeDestination: cur_dest_norm=%f, result=%s, quaternion=%s", 
-            cur_dest_norm, result.toString().c_str(), VectorMath::toString(quaternion, true).c_str());
+        Utils::log(Utils::stringf("isSafeDestination: cur_dest_norm=%f, result=%s, quaternion=%s", 
+            cur_dest_norm, result.toString().c_str(), VectorMath::toString(quaternion, true).c_str()));
     }
     //else no suggestions required
 }
 
 float SafetyEval::adjustClearanceForPrStl(float base_clearance, float obs_confidence)
 {
-    //3.2 comes from inverse CDF for epsilone = 0.05 (i.e. 95% confidence), author: akapoor
+    //3.2 comes from inverse CDF for epsilon = 0.05 (i.e. 95% confidence), author: akapoor
     float additional_clearance = (1 - obs_confidence) * 3.2f;   
     if (additional_clearance != 0)
-        Utils::logMessage("additional_clearance=%f", additional_clearance);
+        Utils::log(Utils::stringf("additional_clearance=%f", additional_clearance));
 
     return base_clearance + additional_clearance;
 }
@@ -182,7 +181,7 @@ void SafetyEval::setSuggestedVelocity(SafetyEval::EvalResult& result, const Quat
             const Vector3r suggested_body = Vector3r(std::cos(suggested_angle), std::sin(suggested_angle), 0).normalized();
             result.suggested_vec = VectorMath::transformToWorldFrame(suggested_body, quaternion, true);
 
-            Utils::logMessage("right_risk_dist=%f, left_risk_dist=%f, suggested_tick=%i, suggested_angle=%f", right_risk_dist, left_risk_dist, suggested_tick, suggested_angle, suggested_angle);
+            Utils::log(Utils::stringf("right_risk_dist=%f, left_risk_dist=%f, suggested_tick=%i, suggested_angle=%f", right_risk_dist, left_risk_dist, suggested_tick, suggested_angle, suggested_angle));
 
             break; //if none found then suggested_vec is left as zero vec, meaning enter hover mode
         }      
@@ -207,7 +206,7 @@ Vector3r SafetyEval::getDestination(const Vector3r& cur_pos, const Vector3r& vel
     //breaking distance at this velocity
     float velocity_mag = velocity.norm();
     float dest_pos_dist = std::max(velocity_mag * vehicle_params_.vel_to_breaking_dist,
-        vehicle_params_.min_vel_to_breaking_dist);
+        vehicle_params_.min_breaking_dist);
 
     //calculate dest_pos cur_pos we will be if we had to break suddenly
     return velocity_mag >= vehicle_params_.distance_accuracy ? 
@@ -239,12 +238,12 @@ void SafetyEval::setSafety(SafetyViolationType enable_reasons, float obs_clearan
     enable_reasons_ = enable_reasons;
     setObsAvoidanceStrategy(obs_strategy);
 
-    Utils::logMessage("enable_reasons: %X", uint(enable_reasons));
+    Utils::log(Utils::stringf("enable_reasons: %X", uint(enable_reasons)));
 }
 void SafetyEval::setObsAvoidanceStrategy(SafetyEval::ObsAvoidanceStrategy obs_strategy)
 {
     obs_strategy_ = obs_strategy;
-    Utils::logMessage("obs_strategy=%X", uint(obs_strategy));
+    Utils::log(Utils::stringf("obs_strategy=%X", uint(obs_strategy)));
 }
 SafetyEval::ObsAvoidanceStrategy SafetyEval::getObsAvoidanceStrategy()
 {

@@ -142,8 +142,12 @@ public:
         //Below 51km: Practical Meteorology by Roland Stull, pg 12
         //Above 51km: http://www.braeunig.us/space/atmmodel.htm
         //Validation data: https://www.avs.org/AVS/files/c7/c7edaedb-95b2-438f-adfb-36de54f87b9e.pdf
+
+        //TODO: handle -ve altitude better (shouldn't grow indefinitely!)
+
         if (geopot_height <= 11)
-            return  101325 * powf(288.15f / std_temperature, -5.255877f);
+            //at alt 0, return sea level pressure
+            return  SeaLevelPressure * powf(288.15f / std_temperature, -5.255877f);
         else if (geopot_height <= 20)
             return 22632.06f * expf(-0.1577f * (geopot_height - 11));
         else if (geopot_height <= 32)
@@ -281,27 +285,6 @@ public:
         );
     }
 
-    struct HomeGeoPoint {
-        GeoPoint home_point;
-        double lat_rad, lon_rad;
-        double cos_lat, sin_lat;
-
-        HomeGeoPoint()
-        {}
-        HomeGeoPoint(const GeoPoint& home_point_val)
-        {
-            initialize(home_point_val);
-        }
-        void initialize(const GeoPoint& home_point_val)
-        {
-            home_point = home_point_val;
-            lat_rad = Utils::degreesToRadians(home_point.latitude);
-            lon_rad = Utils::degreesToRadians(home_point.longitude);
-            cos_lat = cos(lat_rad);
-            sin_lat = sin(lat_rad);
-        }
-    };
-
     static GeoPoint nedToGeodetic(const Vector3r& v, const HomeGeoPoint& home_geo_point)
     {
         double x_rad = v.x() / EARTH_RADIUS;
@@ -315,9 +298,9 @@ public:
                 atan2(y_rad * sin_c, c * home_geo_point.cos_lat * cos_c - x_rad * home_geo_point.sin_lat * sin_c));
 
             return GeoPoint(Utils::radiansToDegrees(lat_rad), Utils::radiansToDegrees(lon_rad), 
-                home_geo_point.home_point.altitude - v.z());
+                home_geo_point.home_geo_point.altitude - v.z());
         } else
-            return GeoPoint(home_geo_point.home_point.latitude, home_geo_point.home_point.longitude, home_geo_point.home_point.altitude - v.z());
+            return GeoPoint(home_geo_point.home_geo_point.latitude, home_geo_point.home_geo_point.longitude, home_geo_point.home_geo_point.altitude - v.z());
     }
 
     //below are approximate versions and would produce errors of more than 10m for points farther than 1km
@@ -352,7 +335,10 @@ public: //consts
     static constexpr float SeaLevelAirDensity = 1.225f; //kg/m^3
     static constexpr float Gravity = 9.80665f;    //m/s^2
     static constexpr float Radius = EARTH_RADIUS; //m
-
+    static constexpr float SpeedOfLight = 299792458.0f; //m
+    static constexpr float Obliquity = Utils::degreesToRadians(23.4397f); 
+    static constexpr double Perihelion = Utils::degreesToRadians(102.9372); // perihelion of the Earth
+    static constexpr double DistanceFromSun = 149597870700.0; // meters
 
 private:
     /* magnetic field */

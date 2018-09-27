@@ -22,25 +22,24 @@ STRICT_MODE_OFF
 STRICT_MODE_ON
 #include "UnitTests.h"
 
-#if defined(_WIN32)
+#if defined(_WIN32) || ((defined __cplusplus) && (__cplusplus >= 201700L))
 #include <filesystem>
-// for some unknown reason, VC++ doesn't define this handy macro...
-#define __cpp_lib_experimental_filesystem 201406
+#define USE_CPP_FILESYSTEM
 #else
-#if __has_include(<experimental/filesystem>)
-#include <experimental/filesystem>
-#endif
+#undef USE_CPP_FILESYSTEM
 #endif
 
 /* enable math defines on Windows */
 
+#ifndef M_PI_2
 #define M_PI_2     1.57079632679489661923   // pi/2
+#endif
 
 static const int pixhawkVendorId = 9900;   ///< Vendor ID for Pixhawk board (V2 and V1) and PX4 Flow
 static const int pixhawkFMUV4ProductId = 18;     ///< Product ID for Pixhawk V2 board
 static const int pixhawkFMUV2ProductId = 17;     ///< Product ID for Pixhawk V2 board
 static const int pixhawkFMUV2OldBootloaderProductId = 22;     ///< Product ID for Bootloader on older Pixhawk V2 boards
-static const int pixhawkFMUV1ProductId = 16;     ///< Product ID for PX4 FMU V1 board
+//static const int pixhawkFMUV1ProductId = 16;     ///< Product ID for PX4 FMU V1 board
 
 #define MAV_AUTOPILOT_ENUM_END (static_cast<uint8_t>(MAV_AUTOPILOT::MAV_AUTOPILOT_ASLUAV)+1)
 #define MAV_TYPE_ENUM_END (static_cast<uint8_t>(MAV_TYPE::MAV_TYPE_ADSB)+1)
@@ -149,9 +148,19 @@ bool telemetry = false;
 std::mutex logLock;
 std::stringstream initScript;
 
-#if defined(__cpp_lib_experimental_filesystem)
+std::shared_ptr<MavLinkConnection> droneConnection;
+std::shared_ptr<MavLinkConnection> logConnection;
+std::shared_ptr<MavLinkVehicle> mavLinkVehicle;
 
-using namespace std::experimental::filesystem::v1;
+
+#if defined(USE_CPP_FILESYSTEM)
+
+//can't use experimental stuff on Linux because of potential ABI issues
+#if defined(_WIN32) || ((defined __cplusplus) && (__cplusplus < 201700L))
+using namespace std::experimental::filesystem;
+#else
+using namespace std::filesystem;
+#endif
 
 void ConvertLogFileToJson(std::string logFile)
 {
@@ -186,9 +195,9 @@ class CsvWriter {
     bool begin;
     std::string delimiter;
 public:
-    CsvWriter(std::string fileName, std::string delimiter) {
+    CsvWriter(std::string fileName, std::string tabDelimiter) {
         csvFile.open(fileName.c_str());
-        this->delimiter = delimiter;
+        this->delimiter = tabDelimiter;
     }
     ~CsvWriter() {
         csvFile.close();
@@ -636,7 +645,7 @@ void PrintCustomMode(const MavLinkHeartbeat& heartbeat)
         PrintEnum(CustomSubModeNames, submode);
     }
     else {
-        Utils::logMessage("    Custom mode=%x", heartbeat.custom_mode);
+        Utils::log(Utils::stringf("    Custom mode=%x", heartbeat.custom_mode));
     }
 }
 
@@ -645,28 +654,28 @@ void PrintHeartbeat(const MavLinkMessage& msg) {
     MavLinkHeartbeat heartbeat;
     heartbeat.decode(msg);
 
-    Utils::logMessage("Connected:");
-    Utils::logMessage("    Version=%d", static_cast<int>(heartbeat.mavlink_version));
+    Utils::log("Connected:\n");
+    Utils::log(Utils::stringf("    Version=%d\n", static_cast<int>(heartbeat.mavlink_version)));
 
     if (heartbeat.type < MAV_TYPE_ENUM_END) {
-        Utils::logMessage("    Type=%s", MavTypeNames[heartbeat.type]);
+        Utils::log(Utils::stringf("    Type=%s\n", MavTypeNames[heartbeat.type]));
     }
 
     if (heartbeat.autopilot < MAV_AUTOPILOT_ENUM_END) {
-        Utils::logMessage("    Autopilot=%s", AutoPilotNames[heartbeat.autopilot]);
+        Utils::log(Utils::stringf("    Autopilot=%s\n", AutoPilotNames[heartbeat.autopilot]));
     }
 
     if (heartbeat.system_status < MAV_STATE_ENUM_END) {
-        Utils::logMessage("    State=%s", MavStateNames[heartbeat.system_status]);
+        Utils::log(Utils::stringf("    State=%s\n", MavStateNames[heartbeat.system_status]));
     }
 
-    Utils::logMessage("    Base mode:");
+    Utils::log("    Base mode:\n");
     PrintFlags(ModeFlagNames, heartbeat.base_mode);
 
     PrintCustomMode(heartbeat);
 
-    Utils::logMessage("    VEHICLE SYSTEM ID: %i", msg.sysid);
-    Utils::logMessage("    VEHICLE COMPONENT ID: %i", msg.compid);
+    Utils::log(Utils::stringf("    VEHICLE SYSTEM ID: %i\n", msg.sysid));
+    Utils::log(Utils::stringf("    VEHICLE COMPONENT ID: %i\n", msg.compid));
 
 }
 
@@ -764,7 +773,7 @@ bool ParseCommandLine(int argc, const char* argv[])
 {
     const char* logDirOption = "logdir";
     const char* logformatOption = "logformat";
-    const char* outLogFileOption = "outlogfile";
+    //const char* outLogFileOption = "outlogfile";
     const char* wifiOption = "wifi";
     const char* initOption = "init";
     const char* filterOption = "filter";
@@ -879,12 +888,12 @@ bool ParseCommandLine(int argc, const char* argv[])
                 if (parts.size() > 1)
                 {
                     std::string filters(arg + 1 + strlen(filterOption) + 1);
-                    std::vector<std::string> parts = Utils::split(filters, ",", 1);
-                    for (auto ptr = parts.begin(), end = parts.end(); ptr != end; ptr++) {
+                    std::vector<std::string> fparts = Utils::split(filters, ",", 1);
+                    for (auto ptr = fparts.begin(), end = fparts.end(); ptr != end; ptr++) {
                         std::string f = *ptr;
                         try {
-                            long i = std::stol(f);
-                            filterTypes.push_back(i);
+                            long ft = std::stol(f);
+                            filterTypes.push_back(ft);
                         }
                         catch (std::exception&) {
                             printf("expecting integer filter messagid, but found %s\n", f.c_str());
@@ -893,6 +902,7 @@ bool ParseCommandLine(int argc, const char* argv[])
                     }
                 }
             }
+#if defined(USE_CPP_FILESYSTEM)
             else if (lower == initOption) {
 
                 if (parts.size() > 1)
@@ -901,6 +911,7 @@ bool ParseCommandLine(int argc, const char* argv[])
                     LoadInitScript(fileName);
                 }
             }
+#endif
             else if (lower == "local")
             {
                 if (parts.size() > 1)
@@ -1000,7 +1011,7 @@ void HexDump(uint8_t *buffer, uint len)
     }
 }
 
-std::shared_ptr<MavLinkConnection> connectProxy(std::shared_ptr<MavLinkConnection> droneConnection, const PortAddress& endPoint, std::string name)
+std::shared_ptr<MavLinkConnection> connectProxy(const PortAddress& endPoint, std::string name)
 {
     printf("Connecting to UDP Proxy address %s:%d\n", endPoint.addr.c_str(), endPoint.port);
 
@@ -1055,9 +1066,6 @@ std::shared_ptr<MavLinkConnection> connectServer(const PortAddress& endPoint, st
     return serverConnection;
 }
 
-std::shared_ptr<MavLinkConnection> droneConnection;
-std::shared_ptr<MavLinkConnection> logConnection;
-
 void runTelemetry() {
     while (telemetry) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1075,6 +1083,7 @@ void runTelemetry() {
 }
 
 void startTelemetry() {
+    Utils::cleanupThread(telemetry_thread);
     telemetry_thread = std::thread(&runTelemetry);
 }
 
@@ -1085,7 +1094,7 @@ void stopTelemetry() {
     }
 }
 
-bool connect(std::shared_ptr<MavLinkVehicle> mavLinkVehicle)
+bool connect()
 {
     if (offboard && serial)
     {
@@ -1160,7 +1169,7 @@ bool connect(std::shared_ptr<MavLinkVehicle> mavLinkVehicle)
         if (logViewerEndPoint.addr == "") {
             logViewerEndPoint.addr = defaultLocalAddress;
         }
-        logConnection = connectProxy(droneConnection, logViewerEndPoint, "log");
+        logConnection = connectProxy(logViewerEndPoint, "log");
         usedPorts.push_back(logViewerEndPoint);
         if (serial && telemetry) {
             startTelemetry();
@@ -1183,14 +1192,14 @@ bool connect(std::shared_ptr<MavLinkVehicle> mavLinkVehicle)
             }
         }
         usedPorts.push_back(proxyEndPoint);
-        connectProxy(droneConnection, proxyEndPoint, "proxy");
+        connectProxy(proxyEndPoint, "proxy");
     }
 
 
     return true;
 }
 
-void checkPulse(std::shared_ptr<MavLinkVehicle> mavLinkVehicle)
+void checkPulse()
 {
     MavLinkHeartbeat heartbeat;
     if (!mavLinkVehicle->waitForHeartbeat().wait(100000, &heartbeat)) {
@@ -1213,13 +1222,13 @@ void handleStatus(const MavLinkStatustext& statustext) {
     }
 
     std::string safeText(statustext.text, 50);
-    Utils::logMessage("STATUS: sev=%d, '%s'", static_cast<int>(statustext.severity), safeText.c_str());
+    Utils::log(Utils::stringf("STATUS: sev=%d, '%s'\n", static_cast<int>(statustext.severity), safeText.c_str()));
 }
 
-int console(std::stringstream& initScript) {
+int console(std::stringstream& script) {
 
     std::string line;
-    std::shared_ptr<MavLinkVehicle> mavLinkVehicle = std::make_shared<MavLinkVehicle>(LocalSystemId, LocalComponentId);
+    mavLinkVehicle = std::make_shared<MavLinkVehicle>(LocalSystemId, LocalComponentId);
     std::shared_ptr<MavLinkNode> logViewer = nullptr;
     Command* currentCommand = nullptr;
     OrbitCommand* orbit = new OrbitCommand();
@@ -1240,6 +1249,8 @@ int console(std::stringstream& initScript) {
     cmdTable.push_back(new GetSetParamCommand());
     cmdTable.push_back(new StatusCommand());
     cmdTable.push_back(new PositionCommand());
+    cmdTable.push_back(new HilCommand());
+    cmdTable.push_back(new FakeGpsCommand());
     cmdTable.push_back(new RequestImageCommand());
     cmdTable.push_back(new FtpCommand());
     cmdTable.push_back(new PlayLogCommand());
@@ -1252,7 +1263,7 @@ int console(std::stringstream& initScript) {
     cmdTable.push_back(new BatteryCommand());
     cmdTable.push_back(new WaitForAltitudeCommand());
 
-    if (!connect(mavLinkVehicle)) {
+    if (!connect()) {
         return 1;
     }
 
@@ -1298,7 +1309,7 @@ int console(std::stringstream& initScript) {
     }
 
     // this stops us from being able to connect to SITL mode PX4.
-    //checkPulse(mavLinkVehicle);
+    //checkPulse();
 
     int retries = 0;
     while (retries++ < 5) {
@@ -1347,12 +1358,12 @@ int console(std::stringstream& initScript) {
 
 
     printf("Ready...\n");
-    initScript << "status\n";
+    script << "status\n";
 
     while (!std::cin.eof()) {
 
-        if (!initScript.eof()) {
-            std::getline(initScript, line);
+        if (!script.eof()) {
+            std::getline(script, line);
         }
         else {
             std::getline(std::cin, line);
@@ -1380,7 +1391,7 @@ int console(std::stringstream& initScript) {
             }
             else if (cmd == "connect")
             {
-                connect(mavLinkVehicle);
+                connect();
             }
             else if (cmd == "?" || cmd == "help")
             {
@@ -1405,8 +1416,9 @@ int console(std::stringstream& initScript) {
                     auto str = std::string(Command::kCommandLogPrefix) + line;
                     MavLinkStatustext st;
                     strncpy(st.text, str.c_str(), 50);
-                    MavLinkMessage m;
-                    st.encode(m, 0);
+                    MavLinkMessage m; 
+                    st.encode(m);
+                    droneConnection->prepareForSending(m);
                     std::lock_guard<std::mutex> lock(logLock);
                     inLogFile->write(m);
                 }
@@ -1446,7 +1458,7 @@ int console(std::stringstream& initScript) {
     logViewer = nullptr;
     droneConnection = nullptr;
     logConnection = nullptr;
-
+    mavLinkVehicle = nullptr;
     CloseLogFiles();
     return 0;
 }
@@ -1463,7 +1475,7 @@ int main(int argc, const char* argv[])
         return 1;
     }
 
-#if defined(__cpp_lib_experimental_filesystem)
+#if defined(USE_CPP_FILESYSTEM)
     if (convertExisting) {
         if (jsonLogFormat) {
             ConvertLogFilesToJson(logDirectory);

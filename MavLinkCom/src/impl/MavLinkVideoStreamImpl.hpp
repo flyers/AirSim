@@ -13,7 +13,7 @@ namespace mavlinkcom_impl {
 	class MavLinkVideoClientImpl : public MavLinkNodeImpl
 	{
 	public:
-		MavLinkVideoClientImpl(int local_system_id, int local_component_id);
+		MavLinkVideoClientImpl(int localSystemId, int localComponentId);
 		~MavLinkVideoClientImpl();
 
 		//image APIs
@@ -88,10 +88,10 @@ namespace mavlinkcom_impl {
 	class MavLinkVideoServerImpl : public MavLinkNodeImpl
 	{
 	public:
-		MavLinkVideoServerImpl(int local_system_id, int local_component_id);
+		MavLinkVideoServerImpl(int localSystemId, int localComponentId);
 		~MavLinkVideoServerImpl();
 
-		bool hasVideoRequest(MavLinkVideoServer::MavLinkVideoRequest& req);
+        bool hasVideoRequest(MavLinkVideoServer::MavLinkVideoRequest& req);
 
 		void sendFrame(uint8_t data[], uint32_t data_size, uint16_t width, uint16_t height, uint8_t image_type, uint8_t image_quality);
 

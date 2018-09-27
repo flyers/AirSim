@@ -8,8 +8,10 @@
 #include <Wbemidl.h>
 #include <string>
 #include "Windows.h"
-
+#include "Utils.hpp"
+#ifndef ONECORE
 #pragma comment(lib, "wbemuuid.lib")
+#endif
 
 class SerialPort::serialport_impl
 {
@@ -48,12 +50,16 @@ public:
 		int writeBufferSize = 8192;
 
 		std::string port = portName;
+#ifndef ONECORE
 		if (port.substr(0, 4) != "\\\\.\\")
 		{
 			port.insert(0, "\\\\.\\");
 		}
+#endif
+        std::wstring wide(port.begin(), port.end());
 
-		handle = CreateFileA(port.c_str(), GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, 0);
+		handle = CreateFileW(wide.c_str(), GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, 0);
 
 		if (handle == INVALID_HANDLE_VALUE)
 		{
@@ -139,7 +145,21 @@ public:
 		dcb.BaudRate = baudRate;
 		dcb.Parity = (byte)parity;
 		dcb.ByteSize = (byte)dataBits;
-		dcb.StopBits = (BYTE)bits;
+
+        switch (bits)
+        {
+        case StopBits_10:
+            dcb.StopBits = ONESTOPBIT;
+            break;
+        case StopBits_15:
+            dcb.StopBits = ONE5STOPBITS;
+            break;
+        case StopBits_20:
+            dcb.StopBits = TWOSTOPBITS;
+            break;
+        default:
+            break;
+        }
 
 		// Clear Handshake flags
 		dcb.fOutxCtsFlow = 0;
@@ -296,7 +316,8 @@ public:
 		{
 			return -1;
 		}
-		setAttributes(baudRate, parity, dataBits, sb, hs, readTimeout, writeTimeout);
+		if (setAttributes(baudRate, parity, dataBits, sb, hs, readTimeout, writeTimeout) != 0)
+			return -1;
 
 		closed_ = false;
 		return 0;
@@ -330,7 +351,7 @@ public:
 
 	int setAttributes(int baudRate, Parity parity, int dataBits, StopBits stopBits, Handshake handshake, int readTimeout, int writeTimeout)
 	{
-        writeTimeout; // avoid warning: unused parameter
+        unused(writeTimeout);
 		struct termios tty;
 		::memset(&tty, 0, sizeof tty);
 		if (tcgetattr(fd, &tty) != 0)

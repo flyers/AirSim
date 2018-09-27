@@ -1,26 +1,44 @@
-#include "AirSim.h"
 #include "CameraDirector.h"
+#include "GameFramework/PlayerController.h"
 #include "AirBlueprintLib.h"
-
 
 ACameraDirector::ACameraDirector()
 {
     PrimaryActorTick.bCanEverTick = true;
+
+    // Create a spring arm component for our chase camera
+    SpringArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("SpringArm"));
+    SpringArm->SetRelativeLocation(FVector(0.0f, 0.0f, 34.0f));
+    SpringArm->SetWorldRotation(FRotator(-20.0f, 0.0f, 0.0f));
+    SpringArm->TargetArmLength = 125.0f;
+    SpringArm->bEnableCameraLag = false;
+    SpringArm->bEnableCameraRotationLag = false;
+    SpringArm->CameraRotationLagSpeed = 10.0f;
+    SpringArm->bInheritPitch = true;
+    SpringArm->bInheritYaw = true;
+    SpringArm->bInheritRoll = true;
 }
 
 void ACameraDirector::BeginPlay()
 {
-    setupInputBindings();
-
     Super::BeginPlay();
 }
 
-void ACameraDirector::Tick( float DeltaTime )
+void ACameraDirector::Tick(float DeltaTime)
 {
-    Super::Tick( DeltaTime );
+    Super::Tick(DeltaTime);
 
     if (mode_ == ECameraDirectorMode::CAMERA_DIRECTOR_MODE_MANUAL) {
-        ExternalCamera->SetActorLocationAndRotation(camera_location_manual_, camera_rotation_manual_);
+        manual_pose_controller_->updateActorPose(DeltaTime);
+    }
+    else if (mode_ == ECameraDirectorMode::CAMERA_DIRECTOR_MODE_SPRINGARM_CHASE) {
+        //do nothing, spring arm is pulling the camera with it
+    }
+    else if (mode_ == ECameraDirectorMode::CAMERA_DIRECTOR_MODE_NODISPLAY) {
+        //do nothing, we have camera turned off
+    }
+    else { //make camera move in desired way
+        UAirBlueprintLib::FollowActor(ExternalCamera, follow_actor_, initial_ground_obs_offset_, ext_obs_fixed_z_);
     }
 }
 
@@ -29,167 +47,266 @@ ECameraDirectorMode ACameraDirector::getMode()
     return mode_;
 }
 
+void ACameraDirector::initializeForBeginPlay(ECameraDirectorMode view_mode,
+    AActor* follow_actor, APIPCamera* fpv_camera, APIPCamera* front_camera, APIPCamera* back_camera)
+{
+    manual_pose_controller_ = NewObject<UManualPoseController>(this, "CameraDirector_ManualPoseController");
+    manual_pose_controller_->initializeForPlay();
+
+    setupInputBindings();
+
+    mode_ = view_mode;
+
+    follow_actor_ = follow_actor;
+    fpv_camera_ = fpv_camera;
+    front_camera_ = front_camera;
+    backup_camera_ = back_camera;
+    camera_start_location_ = ExternalCamera->GetActorLocation();
+    camera_start_rotation_ = ExternalCamera->GetActorRotation();
+    initial_ground_obs_offset_ = camera_start_location_ - 
+        (follow_actor_ ? follow_actor_->GetActorLocation() : FVector::ZeroVector);
+
+    //set initial view mode
+    switch (mode_) {
+    case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_FLY_WITH_ME: inputEventFlyWithView(); break;
+    case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_FPV: inputEventFpvView(); break;
+    case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_GROUND_OBSERVER: inputEventGroundView(); break;
+    case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_MANUAL: inputEventManualView(); break;
+    case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_SPRINGARM_CHASE: inputEventSpringArmChaseView(); break;
+    case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_BACKUP: inputEventBackupView(); break;
+    case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_NODISPLAY: inputEventNoDisplayView(); break;
+    case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_FRONT: inputEventFrontView(); break;
+    default:
+        throw std::out_of_range("Unsupported view mode specified in CameraDirector::initializeForBeginPlay");
+    }
+}
+
+void ACameraDirector::attachSpringArm(bool attach)
+{
+    if (attach) {
+        //If we do have actor to follow AND don't have sprint arm attached to that actor, we will attach it
+        if (follow_actor_ && ExternalCamera->GetRootComponent()->GetAttachParent() != SpringArm) {
+            //For car, we want a bit of camera lag, as that is customary of racing video games
+            //If the lag is missing, the camera will also occasionally shake.
+            //But, lag is not desired when piloting a drone
+            SpringArm->bEnableCameraRotationLag = camera_rotation_lag_enabled_;
+
+            //attach spring arm to actor
+            SpringArm->AttachToComponent(follow_actor_->GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
+            SpringArm->SetRelativeLocation(FVector(0.0f, 0.0f, 34.0f));
+
+            //remember current parent for external camera. Later when we remove external
+            //camera from spring arm, we will attach it back to its last parent
+            last_parent_ = ExternalCamera->GetRootComponent()->GetAttachParent();
+            ExternalCamera->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+            //now attach camera to spring arm
+            ExternalCamera->AttachToComponent(SpringArm, FAttachmentTransformRules::KeepRelativeTransform);
+        }
+
+        //For car, we need to move the camera back a little more than for a drone. 
+        //Otherwise, the camera will be stuck inside the car
+        ExternalCamera->SetActorRelativeLocation(FVector(follow_distance_ * 100.0f, 0.0f, 0.0f));
+        ExternalCamera->SetActorRelativeRotation(FRotator(10.0f, 0.0f, 0.0f));
+        //ExternalCamera->bUsePawnControlRotation = false;
+    }
+    else { //detach
+        if (last_parent_ && ExternalCamera->GetRootComponent()->GetAttachParent() == SpringArm) {
+            ExternalCamera->DetachFromActor(FDetachmentTransformRules::KeepRelativeTransform);
+            ExternalCamera->AttachToComponent(last_parent_, FAttachmentTransformRules::KeepRelativeTransform);
+        }
+    }
+}
+
 void ACameraDirector::setMode(ECameraDirectorMode mode)
 {
-    mode_ = mode;
+    {   //first remove any settings done by previous mode
 
-    if (mode_ == ECameraDirectorMode::CAMERA_DIRECTOR_MODE_MANUAL) {
-        camera_location_manual_ = ExternalCamera->GetActorLocation();
-        camera_rotation_manual_ = ExternalCamera->GetActorRotation();
-        enableManualBindings(true);
+        //detach spring arm
+        if (mode_ == ECameraDirectorMode::CAMERA_DIRECTOR_MODE_SPRINGARM_CHASE &&
+            mode != ECameraDirectorMode::CAMERA_DIRECTOR_MODE_SPRINGARM_CHASE) 
+        {
+            attachSpringArm(false);
+        }
+
+        // Re-enable rendering
+        if (mode_ == ECameraDirectorMode::CAMERA_DIRECTOR_MODE_NODISPLAY &&
+            mode != ECameraDirectorMode::CAMERA_DIRECTOR_MODE_NODISPLAY)
+        {
+            UAirBlueprintLib::enableViewportRendering(this, true);
+        }
+
+        //Remove any existing key bindings for manual mode
+        if (mode != ECameraDirectorMode::CAMERA_DIRECTOR_MODE_MANUAL) {
+            if (ExternalCamera != nullptr
+                && manual_pose_controller_->getActor() == ExternalCamera) {
+
+                manual_pose_controller_->setActor(nullptr);
+            }
+            //else someone else is bound to manual pose controller, leave it alone
+        }
     }
-    else
-        enableManualBindings(false);
+    
+    {   //perform any settings to enter in to this mode
+
+        switch (mode) {
+        case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_MANUAL:
+            //if new mode is manual mode then add key bindings
+            manual_pose_controller_->setActor(ExternalCamera); break;
+        case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_SPRINGARM_CHASE:
+            //if we switched to spring arm mode then attach to spring arm (detachment was done earlier in method)
+            attachSpringArm(true); break;
+        case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_NODISPLAY:
+            UAirBlueprintLib::enableViewportRendering(this, false); break;
+        default:
+            //other modes don't need special setup
+            break;
+        }
+
+    }
+
+    //make switch official
+    mode_ = mode;
 }
 
 void ACameraDirector::setupInputBindings()
 {
-    this->EnableInput(this->GetWorld()->GetFirstPlayerController());
+    UAirBlueprintLib::EnableInput(this);
 
-    UAirBlueprintLib::BindActionToKey("InputEventFpvView", EKeys::LeftBracket, this, &ACameraDirector::InputEventFpvView);
-    UAirBlueprintLib::BindActionToKey("InputEventFlyWithView", EKeys::RightBracket, this, &ACameraDirector::InputEventFlyWithView);
-    UAirBlueprintLib::BindActionToKey("InputEventGroundView", EKeys::Backslash, this, &ACameraDirector::InputEventGroundView);
-    UAirBlueprintLib::BindActionToKey("InputEventManualView", EKeys::Semicolon, this, &ACameraDirector::InputEventManualView);
-
-    left_binding_ = & UAirBlueprintLib::BindAxisToKey("inputManualArrowLeft", EKeys::Left, this, &ACameraDirector::inputManualLeft);
-    right_binding_ = & UAirBlueprintLib::BindAxisToKey("inputManualArrowRight", EKeys::Right, this, &ACameraDirector::inputManualRight);
-    forward_binding_ = & UAirBlueprintLib::BindAxisToKey("inputManualForward", EKeys::Up, this, &ACameraDirector::inputManualForward);
-    backward_binding_ = & UAirBlueprintLib::BindAxisToKey("inputManualBackward", EKeys::Down, this, &ACameraDirector::inputManualBackward);
-    up_binding_ = & UAirBlueprintLib::BindAxisToKey("inputManualArrowUp", EKeys::PageUp, this, &ACameraDirector::inputManualMoveUp);
-    down_binding_ = & UAirBlueprintLib::BindAxisToKey("inputManualArrowDown", EKeys::PageDown, this, &ACameraDirector::inputManualDown);
-    left_yaw_binding_ = & UAirBlueprintLib::BindAxisToKey("inputManualLeftYaw", EKeys::A, this, &ACameraDirector::inputManualLeftYaw);
-    up_pitch_binding_ = & UAirBlueprintLib::BindAxisToKey("inputManualUpPitch", EKeys::W, this, &ACameraDirector::inputManualUpPitch);
-    right_yaw_binding_ = & UAirBlueprintLib::BindAxisToKey("inputManualRightYaw", EKeys::D, this, &ACameraDirector::inputManualRightYaw);
-    down_pitch_binding_ = & UAirBlueprintLib::BindAxisToKey("inputManualDownPitch", EKeys::S, this, &ACameraDirector::inputManualDownPitch);
+    UAirBlueprintLib::BindActionToKey("inputEventFpvView", EKeys::F, this, &ACameraDirector::inputEventFpvView);
+    UAirBlueprintLib::BindActionToKey("inputEventFlyWithView", EKeys::B, this, &ACameraDirector::inputEventFlyWithView);
+    UAirBlueprintLib::BindActionToKey("inputEventGroundView", EKeys::Backslash, this, &ACameraDirector::inputEventGroundView);
+    UAirBlueprintLib::BindActionToKey("inputEventManualView", EKeys::M, this, &ACameraDirector::inputEventManualView);
+    UAirBlueprintLib::BindActionToKey("inputEventSpringArmChaseView", EKeys::Slash, this, &ACameraDirector::inputEventSpringArmChaseView);
+    UAirBlueprintLib::BindActionToKey("inputEventBackupView", EKeys::K, this, &ACameraDirector::inputEventBackupView);
+    UAirBlueprintLib::BindActionToKey("inputEventNoDisplayView", EKeys::Hyphen, this, &ACameraDirector::inputEventNoDisplayView);
+    UAirBlueprintLib::BindActionToKey("inputEventFrontView", EKeys::I, this, &ACameraDirector::inputEventFrontView);
 }
 
-void ACameraDirector::enableManualBindings(bool enable)
+void ACameraDirector::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-    left_binding_->bConsumeInput = right_binding_->bConsumeInput = up_binding_->bConsumeInput = down_binding_->bConsumeInput = enable;
-    forward_binding_->bConsumeInput = backward_binding_->bConsumeInput = left_yaw_binding_->bConsumeInput = up_pitch_binding_->bConsumeInput = enable;
-    right_yaw_binding_->bConsumeInput = down_pitch_binding_->bConsumeInput = enable;
+    manual_pose_controller_ = nullptr;
+    SpringArm = nullptr;
+    ExternalCamera = nullptr;
 }
 
-void ACameraDirector::inputManualLeft(float val)
+APIPCamera* ACameraDirector::getFpvCamera() const
 {
-    if (!FMath::IsNearlyEqual(val, 0.f)) {
-		camera_location_manual_ += camera_rotation_manual_.RotateVector(FVector(0,-val*10,0));
+    return fpv_camera_;
+}
+
+APIPCamera* ACameraDirector::getExternalCamera() const
+{
+    return ExternalCamera;
+}
+
+APIPCamera* ACameraDirector::getBackupCamera() const
+{
+    return backup_camera_;
+}
+
+void ACameraDirector::inputEventSpringArmChaseView()
+{
+    if (ExternalCamera) {
+        setMode(ECameraDirectorMode::CAMERA_DIRECTOR_MODE_SPRINGARM_CHASE);
+        ExternalCamera->showToScreen();
+        disableCameras(true, true, false, true);
     }
-}
-void ACameraDirector::inputManualRight(float val)
-{
-    if (!FMath::IsNearlyEqual(val, 0.f))
-		camera_location_manual_ += camera_rotation_manual_.RotateVector(FVector(0, val * 10, 0));
-}
-void ACameraDirector::inputManualForward(float val)
-{
-    if (!FMath::IsNearlyEqual(val, 0.f))
-		camera_location_manual_ += camera_rotation_manual_.RotateVector(FVector(val * 10, 0, 0));
-}
-void ACameraDirector::inputManualBackward(float val)
-{
-    if (!FMath::IsNearlyEqual(val, 0.f))
-	camera_location_manual_ += camera_rotation_manual_.RotateVector(FVector(-val * 10, 0, 0));
-}
-void ACameraDirector::inputManualMoveUp(float val)
-{
-    if (!FMath::IsNearlyEqual(val, 0.f))
-        camera_location_manual_ += FVector(0, 0, val * 10);
-}
-void ACameraDirector::inputManualDown(float val)
-{
-    if (!FMath::IsNearlyEqual(val, 0.f))
-        camera_location_manual_ += FVector(0, 0, -val * 10);
-}
-void ACameraDirector::inputManualLeftYaw(float val)
-{
-    if (!FMath::IsNearlyEqual(val, 0.f))
-        camera_rotation_manual_.Add(0, -val, 0);
-}
-void ACameraDirector::inputManualUpPitch(float val)
-{
-    if (!FMath::IsNearlyEqual(val, 0.f))
-        camera_rotation_manual_.Add(val, 0, 0);
-}
-void ACameraDirector::inputManualRightYaw(float val)
-{
-    if (!FMath::IsNearlyEqual(val, 0.f))
-        camera_rotation_manual_.Add(0, val, 0);
-}
-void ACameraDirector::inputManualDownPitch(float val)
-{
-    if (!FMath::IsNearlyEqual(val, 0.f))
-        camera_rotation_manual_.Add(-val, 0, 0);
+    else
+        UAirBlueprintLib::LogMessageString("Camera is not available: ", "ExternalCamera", LogDebugLevel::Failure);
 }
 
-
-bool ACameraDirector::checkCameraRefs()
+void ACameraDirector::inputEventGroundView()
 {
-    if (ExternalCamera == nullptr || TargetPawn == nullptr || TargetPawn->getFpvCamera() == nullptr) {
-        UAirBlueprintLib::LogMessage("Cannot toggle PIP camera because FPV pwn camera and/or external camera is not set", "", LogDebugLevel::Failure, 60);
-        return false;
+    if (ExternalCamera) {
+        setMode(ECameraDirectorMode::CAMERA_DIRECTOR_MODE_GROUND_OBSERVER);
+        ExternalCamera->showToScreen();
+        disableCameras(true, true, false, true);
+        ext_obs_fixed_z_ = true;
     }
-    return true;
-}
-
-bool ACameraDirector::togglePIPScene()
-{
-    if (!checkCameraRefs())
-        return false;
-    EPIPCameraType main_state = ExternalCamera->toggleEnableCameraTypes(EPIPCameraType::PIP_CAMERA_TYPE_SCENE);
-    EPIPCameraType pip_state = TargetPawn->getFpvCamera()->toggleEnableCameraTypes(EPIPCameraType::PIP_CAMERA_TYPE_SCENE);
-
-    if (ExternalCamera->getCameraMode() == EPIPCameraMode::PIP_CAMERA_MODE_PIP)
-        return main_state != EPIPCameraType::PIP_CAMERA_TYPE_NONE;
     else
-        return pip_state != EPIPCameraType::PIP_CAMERA_TYPE_NONE;
+        UAirBlueprintLib::LogMessageString("Camera is not available: ", "ExternalCamera", LogDebugLevel::Failure);
 }
 
-bool ACameraDirector::togglePIPDepth()
+void ACameraDirector::inputEventManualView()
 {
-    if (!checkCameraRefs())
-        return false;
-    EPIPCameraType main_state = ExternalCamera->toggleEnableCameraTypes(EPIPCameraType::PIP_CAMERA_TYPE_DEPTH);
-    EPIPCameraType pip_state = TargetPawn->getFpvCamera()->toggleEnableCameraTypes(EPIPCameraType::PIP_CAMERA_TYPE_DEPTH);
-
-    if (ExternalCamera->getCameraMode() == EPIPCameraMode::PIP_CAMERA_MODE_PIP)
-        return main_state != EPIPCameraType::PIP_CAMERA_TYPE_NONE;
+    if (ExternalCamera) {
+        setMode(ECameraDirectorMode::CAMERA_DIRECTOR_MODE_MANUAL);
+        ExternalCamera->showToScreen();
+        disableCameras(true, true, false, true);
+    }
     else
-        return pip_state != EPIPCameraType::PIP_CAMERA_TYPE_NONE;
+        UAirBlueprintLib::LogMessageString("Camera is not available: ", "ExternalCamera", LogDebugLevel::Failure);
 }
 
-bool ACameraDirector::togglePIPSeg()
+void ACameraDirector::inputEventNoDisplayView()
 {
-    if (!checkCameraRefs())
-        return false;
-    EPIPCameraType main_state = ExternalCamera->toggleEnableCameraTypes(EPIPCameraType::PIP_CAMERA_TYPE_SEG);
-    EPIPCameraType pip_state = TargetPawn->getFpvCamera()->toggleEnableCameraTypes(EPIPCameraType::PIP_CAMERA_TYPE_SEG);
-
-    if (ExternalCamera->getCameraMode() == EPIPCameraMode::PIP_CAMERA_MODE_PIP)
-        return main_state != EPIPCameraType::PIP_CAMERA_TYPE_NONE;
+    if (ExternalCamera) {
+        setMode(ECameraDirectorMode::CAMERA_DIRECTOR_MODE_NODISPLAY);
+        disableCameras(true, true, true, true);
+    }
     else
-        return pip_state != EPIPCameraType::PIP_CAMERA_TYPE_NONE;
+        UAirBlueprintLib::LogMessageString("Camera is not available: ", "ExternalCamera", LogDebugLevel::Failure);
 }
 
-bool ACameraDirector::togglePIPAll()
+void ACameraDirector::inputEventBackupView()
 {
-    if (!checkCameraRefs())
-        return false;
-    EPIPCameraType main_state = ExternalCamera->toggleEnableCameraTypes(EPIPCameraType::PIP_CAMERA_TYPE_ALL);
-    EPIPCameraType pip_state = TargetPawn->getFpvCamera()->toggleEnableCameraTypes(EPIPCameraType::PIP_CAMERA_TYPE_ALL);
-
-    if (ExternalCamera->getCameraMode() == EPIPCameraMode::PIP_CAMERA_MODE_PIP)
-        return main_state != EPIPCameraType::PIP_CAMERA_TYPE_NONE;
+    if (backup_camera_) {
+        setMode(ECameraDirectorMode::CAMERA_DIRECTOR_MODE_BACKUP);
+        backup_camera_->showToScreen();
+        disableCameras(true, false, true, true);
+    }
     else
-        return pip_state != EPIPCameraType::PIP_CAMERA_TYPE_NONE;
+        UAirBlueprintLib::LogMessageString("Camera is not available: ", "backup_camera", LogDebugLevel::Failure);
 }
 
-
-APIPCamera* ACameraDirector::getCamera(int id)
+void ACameraDirector::inputEventFrontView()
 {
-    //TODO: support multiple camera
-    if (TargetPawn != nullptr)
-        return TargetPawn->getFpvCamera();
+    if (front_camera_) {
+        setMode(ECameraDirectorMode::CAMERA_DIRECTOR_MODE_FRONT);
+        front_camera_->showToScreen();
+        disableCameras(true, true, true, false);
+    }
     else
-        return nullptr;
+        UAirBlueprintLib::LogMessageString("Camera is not available: ", "backup_camera", LogDebugLevel::Failure);
 }
+
+void ACameraDirector::inputEventFlyWithView()
+{
+    if (ExternalCamera) {
+        setMode(ECameraDirectorMode::CAMERA_DIRECTOR_MODE_FLY_WITH_ME);
+        ExternalCamera->showToScreen();
+
+        if (follow_actor_)
+            ExternalCamera->SetActorLocationAndRotation(
+                follow_actor_->GetActorLocation() + initial_ground_obs_offset_, camera_start_rotation_);
+        disableCameras(true, true, false, true);
+        ext_obs_fixed_z_ = false;
+    }
+    else
+        UAirBlueprintLib::LogMessageString("Camera is not available: ", "ExternalCamera", LogDebugLevel::Failure);
+}
+
+void ACameraDirector::inputEventFpvView()
+{
+    if (fpv_camera_) {
+        setMode(ECameraDirectorMode::CAMERA_DIRECTOR_MODE_FPV);
+        fpv_camera_->showToScreen();
+        disableCameras(false, true, true, true);
+    }
+    else
+        UAirBlueprintLib::LogMessageString("Camera is not available: ", "fpv_camera", LogDebugLevel::Failure);
+}
+
+void ACameraDirector::disableCameras(bool fpv, bool backup, bool external, bool front)
+{
+    if (fpv && fpv_camera_)
+        fpv_camera_->disableMain();
+    if (backup && backup_camera_)
+        backup_camera_->disableMain();
+    if (external && ExternalCamera)
+        ExternalCamera->disableMain();
+    if (front && front_camera_)
+        front_camera_->disableMain();
+}
+
+

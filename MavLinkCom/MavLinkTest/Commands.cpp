@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#include "Utils.hpp"
 #include "Commands.h"
 #include <chrono>
 #include <math.h>
@@ -9,17 +8,14 @@
 #include <string.h>
 #include <thread>
 #include <string>
-#include "MavLinkMessages.hpp"
 #include "FileSystem.hpp"
+#include "Utils.hpp"
 
-#if defined(_WIN32)
+#if defined(_WIN32) || ((defined __cplusplus) && (__cplusplus >= 201700L))
 #include <filesystem>
-// for some unknown reason, VC++ doesn't define this handy macro...
-#define __cpp_lib_experimental_filesystem 201406
+#define USE_CPP_FILESYSTEM
 #else
-#if __has_include(<experimental/filesystem>)
-#include <experimental/filesystem>
-#endif
+#undef USE_CPP_FILESYSTEM
 #endif
 
 
@@ -55,16 +51,16 @@ void Command::Execute(std::shared_ptr<MavLinkVehicle> com)
     
     if (subscription == 0)
     {
-        subscription = com->getConnection()->subscribe([=](std::shared_ptr<MavLinkConnection> con, const MavLinkMessage& msg) {
-            con; // avoid warning: unused parameter
+        subscription = com->getConnection()->subscribe([=](std::shared_ptr<MavLinkConnection> connection, const MavLinkMessage& msg) {
+            unused(connection);
             try {
                 HandleMessage(msg);
             }
             catch (std::exception& e) {
-                Utils::logError("### Runtime Error: %s", e.what());
+                Utils::log(Utils::stringf("### Runtime Error: %s", e.what()), Utils::kLogLevelError);
             }
             catch (...) {
-                Utils::logError("### unhandled exception");
+                Utils::log(Utils::stringf("### unhandled exception"), Utils::kLogLevelError);
             }
         });
     }
@@ -298,7 +294,7 @@ void GetSetParamCommand::Execute(std::shared_ptr<MavLinkVehicle> com)
 {
     if (get) {
         try {
-			MavLinkParameter  p;
+            MavLinkParameter  p;
             if (com->getParameter(name).wait(2000, &p)) {
                 if (p.type == static_cast<int>(MAV_PARAM_TYPE::MAV_PARAM_TYPE_REAL32) || 
                     p.type == static_cast<int>(MAV_PARAM_TYPE::MAV_PARAM_TYPE_REAL64)) {
@@ -307,10 +303,10 @@ void GetSetParamCommand::Execute(std::shared_ptr<MavLinkVehicle> com)
                 else {
                     printf("%s=%d\n", p.name.c_str(), static_cast<int>(p.value));
                 }
-			}
-			else {
-				printf("timeout, parameter %s not found\n", p.name.c_str());
-			}
+            }
+            else {
+                printf("timeout, parameter %s not found\n", p.name.c_str());
+            }
         }
         catch (const std::exception& e)
         {
@@ -339,16 +335,16 @@ bool TakeOffCommand::Parse(const std::vector<std::string>& args)
     if (args.size() > 0) {
         std::string cmd = args[0];
         if (cmd == "takeoff") {
-			altitude = 0;
+            altitude = 0;
             if (args.size() > 1)
             {
                 altitude = static_cast<float>(atof(args[1].c_str()));
-				if (altitude > 0) {
-					return true;
-				}
+                if (altitude > 0) {
+                    return true;
+                }
             }
-			printf("Please provide a positive number, meters above current altitude\n");
-			return false;
+            printf("Please provide a positive number, meters above current altitude\n");
+            return false;
         }
     }
     return false;
@@ -363,9 +359,9 @@ void TakeOffCommand::Execute(std::shared_ptr<MavLinkVehicle> com)
     reached = false;
     offground = false;
     bool rc = false;
-	// convert target altitude to a 'z' coordinate (in NED coordinates).
-	auto state = com->getVehicleState();
-	float targetZ = state.local_est.pos.z - altitude;
+    // convert target altitude to a 'z' coordinate (in NED coordinates).
+    auto state = com->getVehicleState();
+    float targetZ = state.local_est.pos.z - altitude;
     if (com->takeoff(targetZ).wait(3000, &rc)) {
         if (rc) {
             printf("ok\n");
@@ -418,7 +414,7 @@ void DumpLogCommandsCommand::processLogCommands(MavLinkFileLog& log, const std::
             if (std::strstr(status_msg.text, kCommandLogPrefix) == status_msg.text) {
                 std::string line = std::string(status_msg.text).substr(std::strlen(kCommandLogPrefix));
                 command_start_timestamp = log_timestamp;
-                x_start = Utils::nanFloat();
+                x_start = Utils::nan<float>();
                 ++command_index;
 
                 std::string command_text_file_name = FileSystem::combine(out_folder, Utils::stringf("cmd_%03d_%s.txt", command_index, line.c_str()));
@@ -469,10 +465,16 @@ void DumpLogCommandsCommand::processLogCommands(MavLinkFileLog& log, const std::
 
 void DumpLogCommandsCommand::Execute(std::shared_ptr<MavLinkVehicle> com)
 {
-    com; // avoid warning: unused parameter
+    unused(com);
 //TODO: make below future proof (i.e. usable by C++17 compiler) - also change same in main.cpp
-#if defined(__cpp_lib_experimental_filesystem)
-    using namespace std::experimental::filesystem::v1;
+#if defined(USE_CPP_FILESYSTEM)
+//can't use experimental stuff on Linux because of potential ABI issues
+#if defined(_WIN32) || ((defined __cplusplus) && (__cplusplus < 201700L))
+    using namespace std::experimental::filesystem;
+#else
+    using namespace std::filesystem;
+#endif
+
     path dirPath(log_folder_);
 
     for (directory_iterator next(dirPath), end; next != end; ++next) {
@@ -500,62 +502,62 @@ bool PlayLogCommand::Parse(const std::vector<std::string>& args)
     if (args.size() <= 0)
         return false;
 
-	this->_syncParams = false;
-	this->_fileName = "";
+    this->_syncParams = false;
+    this->_fileName = "";
 
     std::string cmd = args[0];
     if (cmd == "playlog") {
-		for (size_t i = 1; i < args.size(); i++)
-		{
-			std::string arg = args.at(i);
-			if (arg == "-sync") {
-				this->_syncParams = true;
-			}
-			else if (_fileName == "") {
-				_fileName = args.at(1);
-				log_.openForReading(_fileName);
-			}
-			else {
-				printf("Usage: playlog <mavlink_logfile>\n");
-				return false;
-			}
+        for (size_t i = 1; i < args.size(); i++)
+        {
+            std::string arg = args.at(i);
+            if (arg == "-sync") {
+                this->_syncParams = true;
+            }
+            else if (_fileName == "") {
+                _fileName = args.at(1);
+                log_.openForReading(_fileName);
+            }
+            else {
+                printf("Usage: playlog <mavlink_logfile>\n");
+                return false;
+            }
         }
-		if (_fileName == "") {
-			printf("Usage: playlog <mavlink_logfile>\n");
-			return false;
-		}
+        if (_fileName == "") {
+            printf("Usage: playlog <mavlink_logfile>\n");
+            return false;
+        }
     }
     return false;
 }
 
 void SyncParamValue(std::shared_ptr<MavLinkVehicle> com, std::vector<MavLinkParameter>& params, MavLinkParamValue& param)
 {
-	MavLinkParameter  p;
-	p.index = param.param_index;
-	p.type = param.param_type;
-	char buf[17];
-	std::memset(buf, 0, 17);
-	std::memcpy(buf, param.param_id, 16);
-	p.name = buf;
-	p.value = param.param_value;
+    MavLinkParameter  p;
+    p.index = param.param_index;
+    p.type = param.param_type;
+    char buf[17];
+    std::memset(buf, 0, 17);
+    std::memcpy(buf, param.param_id, 16);
+    p.name = buf;
+    p.value = param.param_value;
 
-	for (auto iter = params.begin(), end = params.end(); iter != end; iter++)
-	{
-		MavLinkParameter q = *iter;
-		if (q.name == p.name) {
-			if (q.value != p.value) {
-				printf("Parameter %s has different value %f, recorded value was %f\n",
-					p.name.c_str(), q.value, p.value);
-				if (p.name.substr(0, 3) == "MC_") {
-					// these PID values are important, so set these to match
-					bool r;
-					if (!com->setParameter(p).wait(1000, &r) || !r) {
-						printf("error setting parameter %s\n", p.name.c_str());
-					}
-				}
-			}
-		}
-	}
+    for (auto iter = params.begin(), end = params.end(); iter != end; iter++)
+    {
+        MavLinkParameter q = *iter;
+        if (q.name == p.name) {
+            if (q.value != p.value) {
+                printf("Parameter %s has different value %f, recorded value was %f\n",
+                    p.name.c_str(), q.value, p.value);
+                if (p.name.substr(0, 3) == "MC_") {
+                    // these PID values are important, so set these to match
+                    bool r;
+                    if (!com->setParameter(p).wait(1000, &r) || !r) {
+                        printf("error setting parameter %s\n", p.name.c_str());
+                    }
+                }
+            }
+        }
+    }
 }
 
 void PlayLogCommand::Execute(std::shared_ptr<MavLinkVehicle> com)
@@ -565,33 +567,33 @@ void PlayLogCommand::Execute(std::shared_ptr<MavLinkVehicle> com)
     quaternion_[0] = 1; //unit quaternion
     uint64_t log_timestamp, log_start_timestamp = 0;
     uint64_t playback_timestamp, playback_start_timestamp;
-	Command* currentCommand = nullptr;
+    Command* currentCommand = nullptr;
     bool armed = false;
     playback_timestamp = playback_start_timestamp = MavLinkFileLog::getTimeStamp();
     uint16_t last_basemode = -1, last_custommode = -1;
 
-	std::vector<MavLinkParameter> params;
-	if (this->_syncParams) {
-		printf("Comparing parameters with recorded log...\n");
-		try {
-			params = com->getParamList();
-		}
-		catch (std::exception e) {
-			printf("%s\n", e.what());
-		}
-	}
+    std::vector<MavLinkParameter> params;
+    if (this->_syncParams) {
+        printf("Comparing parameters with recorded log...\n");
+        try {
+            params = com->getParamList();
+        }
+        catch (std::exception e) {
+            printf("%s\n", e.what());
+        }
+    }
     printf("loading log...\n");
 
     while (log_.read(msg, log_timestamp)) {
         if (log_start_timestamp == 0)
             log_start_timestamp = log_timestamp;
 
-		//sync clocks all the time so that the yellow ribbon also plays back at the right speed.
-		auto current_timestamp = MavLinkFileLog::getTimeStamp();
-		long logDuration = static_cast<long>(log_timestamp - log_start_timestamp);
-		long realDuration = static_cast<long>(current_timestamp - playback_start_timestamp);
-		long waitMicros = logDuration - realDuration;
-		if (waitMicros > 0) {
+        //sync clocks all the time so that the yellow ribbon also plays back at the right speed.
+        auto current_timestamp = MavLinkFileLog::getTimeStamp();
+        long logDuration = static_cast<long>(log_timestamp - log_start_timestamp);
+        long realDuration = static_cast<long>(current_timestamp - playback_start_timestamp);
+        long waitMicros = logDuration - realDuration;
+        if (waitMicros > 0) {
             if (armed) {
                 if (waitMicros > 1E6) { //1s
                     printf("synchronizing clocks for %f sec\n", waitMicros / 1E6f);
@@ -602,11 +604,11 @@ void PlayLogCommand::Execute(std::shared_ptr<MavLinkVehicle> com)
                 // we can skip ahead.
                 playback_start_timestamp -= waitMicros;
             }
-		}
-		else {
-			// our clock fell behind somehow (debug breakpoint?) So fix it by moving our start time forwards by this amount.
-			playback_start_timestamp -= waitMicros;
-		}
+        }
+        else {
+            // our clock fell behind somehow (debug breakpoint?) So fix it by moving our start time forwards by this amount.
+            playback_start_timestamp -= waitMicros;
+        }
 
         switch (msg.msgid)
         {
@@ -617,22 +619,22 @@ void PlayLogCommand::Execute(std::shared_ptr<MavLinkVehicle> com)
             if (std::strstr(status_msg.text, kCommandLogPrefix) == status_msg.text) {
                 std::string line = std::string(status_msg.text).substr(std::strlen(kCommandLogPrefix));
                 auto command = Command::create(line);
-				if (command == nullptr) {
-					throw std::runtime_error(std::string("Command for line ") + line + " cannot be found");
-				}
+                if (command == nullptr) {
+                    throw std::runtime_error(std::string("Command for line ") + line + " cannot be found");
+                }
                 printf("Executing %s\n", line.c_str());
-				try {
+                try {
                     if (Utils::toLower(line) == "arm") {
                         armed = true;
                     }
-					if (currentCommand != nullptr) {
-						currentCommand->Close();
-					}
-					currentCommand = command;
-					currentCommand->Execute(com);
-				} catch (std::exception& e) {
-					printf("Error: %s\n", e.what());
-				}
+                    if (currentCommand != nullptr) {
+                        currentCommand->Close();
+                    }
+                    currentCommand = command;
+                    currentCommand->Execute(com);
+                } catch (std::exception& e) {
+                    printf("Error: %s\n", e.what());
+                }
             }
             break;
         }
@@ -677,21 +679,21 @@ void PlayLogCommand::Execute(std::shared_ptr<MavLinkVehicle> com)
 
             break;
         }
-		case MavLinkParamValue::kMessageId:
-		{
-			if (this->_syncParams) {
-				MavLinkParamValue param;
-				param.decode(msg);
-				SyncParamValue(com, params, param);
-			}
-			break;
-		}
+        case MavLinkParamValue::kMessageId:
+        {
+            if (this->_syncParams) {
+                MavLinkParamValue param;
+                param.decode(msg);
+                SyncParamValue(com, params, param);
+            }
+            break;
+        }
         default:
             break;
         }
     }
 
-	printf("### Log playback is complete.\n");
+    printf("### Log playback is complete.\n");
 }
 
 void TakeOffCommand::HandleMessage(const MavLinkMessage& msg)
@@ -968,6 +970,252 @@ void PositionCommand::HandleMessage(const MavLinkMessage& message)
     }
 }
 
+bool FakeGpsCommand::Parse(const std::vector<std::string>& args)
+{
+    started = false;
+    if (args.size() > 0) {
+        std::string cmd = args[0];
+        if (cmd == "fakegps") {
+            if (args.size() > 1)
+            {
+                std::string arg = args[1];
+                if (arg == "start") {
+                    start();
+                }
+                else if (arg == "stop") {
+                    stop();
+                }
+                else {
+                    printf("fakegps [start|stop] - start stop simple generation of fake GPS input.\n");
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+void FakeGpsCommand::stop() {
+    started = false;
+    if (hil_thread.joinable()) {
+        hil_thread.join();
+    }
+}
+
+void FakeGpsCommand::start() {
+    stop();
+    started = true;
+    Utils::cleanupThread(hil_thread);
+    hil_thread = std::thread(&FakeGpsCommand::GpsThread, this);
+}
+
+void FakeGpsCommand::Execute(std::shared_ptr<MavLinkVehicle> mav)
+{
+    // note: we do not reset com when Close() is called because we want to keep running.
+    // user has to invoke "hil stop" to stop the hil thread.
+    this->com = mav;
+}
+
+float FakeGpsCommand::addNoise(float x, float scale)
+{
+    // generate random between 0 and 1
+    float r = static_cast<float>(rand()) / static_cast<float>(RAND_MAX); 
+    // move to range -1 to 1
+    r = (r * 2) - 1;
+    // scale it
+    r *= scale;
+    // apply iy
+    return x + r;
+}
+
+void FakeGpsCommand::GpsThread()
+{
+    // wait for the Execute method to be called.
+    while (started && this->com == nullptr) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    MavLinkParameter  p;
+    p.name = "MAV_USEHILGPS";
+    p.index = -1;
+    p.value = 1;
+    bool r = false;
+    if (!com->setParameter(p).wait(2000, &r) || !r) {
+        printf("Error setting parameter: MAV_USEHILGPS");
+    }
+
+    while (started) {
+
+        uint64_t usec = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+        // gps is much slower frequency than IMU.
+        // MAVLINK_MSG_ID_HIL_GPS
+        MavLinkHilGps gps;
+        gps.time_usec = usec;
+        gps.alt = static_cast<int32_t>(addNoise(122.0f,1) * 1E3);
+        gps.lat = static_cast<int32_t>(addNoise(47.642406f,0.000001f) * 1E7);
+        gps.lon = static_cast<int32_t>(addNoise(-122.140977f,0.000001f) * 1E7);
+        gps.eph = static_cast<uint16_t>(addNoise(1, 0.1f) * 100);
+        gps.epv = static_cast<uint16_t>(addNoise(1, 0.1f) * 100);
+        gps.fix_type = 3;
+        gps.satellites_visible = 10;
+        gps.vd = static_cast<int16_t>(addNoise(0, 0.1f) * 100); // cm/s
+        gps.ve = static_cast<int16_t>(addNoise(0, 0.1f) * 100); // cm/s
+        gps.vn = static_cast<int16_t>(addNoise(0, 0.1f) * 100); // cm/s
+        gps.vel = static_cast<uint16_t>(std::abs(addNoise(0, 0.1f) * 100));// cm/s
+        gps.cog = static_cast<int16_t>(addNoise(0, 0.3f) * 100); // degrees * 100
+        if (com != nullptr) {
+            com->sendMessage(gps);
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    // disable MAV_USEHILGPS
+    p.name = "MAV_USEHILGPS";
+    p.index = -1;
+    p.value = 0;
+    if (!com->setParameter(p).wait(2000, &r) || !r) {
+        printf("Error clearing parameter: MAV_USEHILGPS");
+    }
+}
+
+bool HilCommand::Parse(const std::vector<std::string>& args)
+{
+    started = false;
+    if (args.size() > 0) {
+        std::string cmd = args[0];
+        if (cmd == "hil") {
+            if (args.size() > 1)
+            {
+                std::string arg = args[1];
+                if (arg == "start") {
+                    start();
+                }
+                else if (arg == "stop") {
+                    stop();
+                }
+                else {
+                    printf("hil [start|stop] - start stop simple hil simulation mode to generate fake GPS input.\n");
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+void HilCommand::stop() {
+
+    started = false;
+    if (hil_thread.joinable()) {
+        hil_thread.join();
+    }
+}
+
+void HilCommand::start() {
+    stop();
+    started = true;
+
+    Utils::cleanupThread(hil_thread);
+    hil_thread = std::thread(&HilCommand::HilThread, this);
+}
+
+void HilCommand::Execute(std::shared_ptr<MavLinkVehicle> mav)
+{
+    // note: we do not reset com when Close() is called because we want to keep running.
+    // user has to invoke "hil stop" to stop the hil thread.
+    this->com = mav;
+}
+
+float HilCommand::addNoise(float x, float scale)
+{
+    // generate random between 0 and 1
+    float r = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+    // move to range -1 to 1
+    r = (r * 2) - 1;
+    // scale it
+    r *= scale;
+    // apply iy
+    return x + r;
+}
+
+void HilCommand::HilThread()
+{
+    int slices = 0;
+
+    // wait for the Execute method to be called.
+    while (started && this->com == nullptr) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    // add MAV_MODE_FLAG_HIL_ENABLED flag to current mode 
+    int mode = com->getVehicleState().mode;
+    mode |= static_cast<int>(MAV_MODE_FLAG::MAV_MODE_FLAG_HIL_ENABLED);
+    MavCmdDoSetMode cmd;
+    cmd.command = static_cast<uint16_t>(MAV_CMD::MAV_CMD_DO_SET_MODE);
+    cmd.Mode = static_cast<float>(mode);
+    com->sendCommand(cmd);
+
+
+    while (started) {
+        slices++;
+
+        uint64_t usec = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+        MavLinkHilSensor hil_sensor;
+        hil_sensor.time_usec = usec;
+        hil_sensor.xacc = addNoise(0, 0.1f);
+        hil_sensor.yacc = addNoise(0, 0.1f);
+        hil_sensor.zacc = addNoise(-9.8f, 0.1f); // gravity
+        hil_sensor.xgyro = addNoise(0, 0.01f);
+        hil_sensor.ygyro = addNoise(0, 0.01f);
+        hil_sensor.zgyro = addNoise(0, 0.01f);
+        hil_sensor.xmag = addNoise(0.2f, 0.1f);
+        hil_sensor.ymag = addNoise(-0.7f, 0.1f);
+        hil_sensor.zmag = addNoise(0.45f, 0.1f);
+        hil_sensor.pressure_alt = addNoise(122, 1);
+        hil_sensor.fields_updated = 1 << 31;
+        if (com != nullptr) {
+            com->sendMessage(hil_sensor);
+        }
+
+        if (slices == 10) {
+            slices = 0;
+            // gps is much slower frequency than IMU.
+            // MAVLINK_MSG_ID_HIL_GPS
+            MavLinkHilGps gps;
+            gps.time_usec = usec;
+            gps.alt = static_cast<int32_t>(addNoise(122.0f, 1) * 1E3);
+            gps.lat = static_cast<int32_t>(addNoise(47.642406f, 0.000001f) * 1E7);
+            gps.lon = static_cast<int32_t>(addNoise(-122.140977f, 0.000001f) * 1E7);
+            gps.eph = static_cast<uint16_t>(addNoise(1, 0.1f) * 100);
+            gps.epv = static_cast<uint16_t>(addNoise(1, 0.1f) * 100);
+            gps.fix_type = 3;
+            gps.satellites_visible = 10;
+            gps.vd = static_cast<int16_t>(addNoise(0, 0.1f) * 100); // cm/s
+            gps.ve = static_cast<int16_t>(addNoise(0, 0.1f) * 100); // cm/s
+            gps.vn = static_cast<int16_t>(addNoise(0, 0.1f) * 100); // cm/s
+            gps.vel = static_cast<uint16_t>(std::abs(addNoise(0, 0.1f) * 100));// cm/s
+            gps.cog = static_cast<int16_t>(addNoise(0, 0.3f) * 100); // degrees * 100
+            if (com != nullptr) {
+                com->sendMessage(gps);
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // disable HIL mode
+    mode = com->getVehicleState().mode;
+    mode &= ~static_cast<int>(MAV_MODE_FLAG::MAV_MODE_FLAG_HIL_ENABLED);
+    cmd.command = static_cast<uint16_t>(MAV_CMD::MAV_CMD_DO_SET_MODE);
+    cmd.Mode = static_cast<float>(mode);
+    com->sendCommand(cmd);
+}
+
 bool BatteryCommand::Parse(const std::vector<std::string>& args) {
     if (args.size() > 0) {
         std::string cmd = args[0];
@@ -1044,7 +1292,8 @@ void StatusCommand::HandleMessage(const MavLinkMessage& message)
         status.decode(message);
 
         int ls = static_cast<int>(status.landed_state);
-        if (ls < static_cast<int>(sizeof(MAV_LANDED_STATE_NAMES))) {
+        int max = static_cast<int>(sizeof(MAV_LANDED_STATE_NAMES) / sizeof(char*));
+        if (ls < max) {
             printf("    landed_state=%s\n", MAV_LANDED_STATE_NAMES[ls]);
         }
         printf("    vtol_state=%d\n", static_cast<int>(status.vtol_state));
@@ -1126,7 +1375,7 @@ public:
 
 void SendImageCommand::Execute(std::shared_ptr<MavLinkVehicle> com)
 {
-    com; // avoid warning: unused parameter
+    unused(com);
     if (logViewer.get() == nullptr)
     {
         printf("sendimage needs a logviewer (use -log on the command line)\n");
@@ -1256,15 +1505,15 @@ bool GotoCommand::Parse(const std::vector<std::string>& args) {
                 if (tz > 0) {
                     tz = -tz; // probably mean negative, since we are using NED coordinates.
                 }
-                if (fabs(tx) > 100) {
+                if (std::fabs(tx) > 100) {
                     printf("### invalid -100 < x < 100 \n");
                     return false;
                 }
-                if (fabs(ty) > 100) {
+                if (std::fabs(ty) > 100) {
                     printf("### invalid -100 < y < 100 \n");
                     return false;
                 }
-                if (fabs(tz) > 100) {
+                if (std::fabs(tz) > 100) {
                     printf("### invalid -100 < z < 100 \n");
                     return false;
                 }
@@ -1358,11 +1607,11 @@ void GotoCommand::HandleMessage(const MavLinkMessage& message)
             channel->moveToLocalPosition(tx, ty, tz, is_yaw, static_cast<float>(theading * M_PI / 180));
             
             if (this->hasLocalPosition) {
-                if (!targetReached && fabsf(x - tx) < nearDelta && fabsf(y - ty) < nearDelta)
+                if (!targetReached && std::abs(x - tx) < nearDelta && std::abs(y - ty) < nearDelta)
                 {
                     targetReached = true;
                 }
-                if (targetReached && !settled && (fabs(this->vx) + fabsf(this->vy) + fabsf(this->vz) < almostStationery)) {
+                if (targetReached && !settled && (fabs(this->vx) + std::abs(this->vy) + std::abs(this->vz) < almostStationery)) {
                     settled = true;
                     // ok, now we can safely switch to loiter.
                     TargetReached();
@@ -1571,7 +1820,7 @@ void OrbitCommand::UpdateTarget()
         float correction = (radius - actualRadius) / radius;
         if (previousCorrection != 0)
         {
-            if (fabs(correction) > fabs(previousCorrection)) {
+            if (std::fabs(correction) > std::fabs(previousCorrection)) {
                 if (correctionFactor < 30) {
                     correctionFactor++;
                 }
@@ -1633,7 +1882,7 @@ void OrbitCommand::MeasureTime(float degrees)
         startAngle = degrees;
         startTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     }
-    else if (!halfWay && fabs(startAngle - degrees) >= 180)
+    else if (!halfWay && std::fabs(startAngle - degrees) >= 180)
     {
         halfWay = true;
     }
@@ -1753,7 +2002,7 @@ bool SquareCommand::Parse(const std::vector<std::string>& args)
                     printf("invalid speed '%f', expecting 0.1 < speed < 10", speed_);
                     return false;
                 }
-				speed_ *= 0.8f; // hack to make it match real drone.
+                speed_ *= 0.8f; // hack to make it match real drone.
             }
             return true;
         }
@@ -1832,7 +2081,7 @@ void SquareCommand::UpdateTarget()
         float dy = ty - y;
         float dist = sqrtf((dx*dx) + (dy*dy));
 
-        if (fabsf(dx) < near && fabsf(dy) < near)
+        if (std::abs(dx) < near && std::abs(dy) < near)
         {
             leg_++;
             if (leg_ == 4) leg_ = 0;
@@ -1948,19 +2197,19 @@ void WiggleCommand::HandleMessage(const MavLinkMessage& message)
             return;
         }
 
-		if (vehicle->hasOffboardControl()) {
-			MavLinkLocalPositionNed pos;
-			pos.decode(message);
+        if (vehicle->hasOffboardControl()) {
+            MavLinkLocalPositionNed pos;
+            pos.decode(message);
 
-			if (xaxis_) {
-				wiggleX(pos);
-			}
-			else {
-				wiggleY(pos);
-			}
+            if (xaxis_) {
+                wiggleX(pos);
+            }
+            else {
+                wiggleY(pos);
+            }
 
-			meter_.reportMessageRate();
-		}
+            meter_.reportMessageRate();
+        }
         break;
     }
     default:
@@ -1979,7 +2228,7 @@ void WiggleCommand::wiggleX(const MavLinkLocalPositionNed& pos)
     double z = pos.z;
 
     // the amount of pitch should depend on our speed in that direction.
-    double speed = fabs(pos.vx);
+    double speed = std::fabs(pos.vx);
 
     float ctrl = thrust_controller_.control(static_cast<float>(-z));
 
@@ -2043,7 +2292,7 @@ void WiggleCommand::wiggleY(const MavLinkLocalPositionNed& pos)
     double z = pos.z;
 
     // the amount of roll should depend on our speed in that direction.
-    double speed = fabs(pos.vy);
+    double speed = std::fabs(pos.vy);
 
     float ctrl = thrust_controller_.control(static_cast<float>(-z));
 
@@ -2416,6 +2665,8 @@ void FtpCommand::startMonitor()
     progress.current = 0;
     progress.goal = 0;
     progress.message = "";
+
+    Utils::cleanupThread(monitorThread);
     monitorThread = std::thread{ &FtpCommand::monitor, this };
 }
 
@@ -2559,7 +2810,7 @@ void FtpCommand::doPut() {
 void FtpCommand::doRemove() {
     std::string fsTarget = normalize(target);
     std::string leaf = FileSystem::getFileName(fsTarget);
-    if (leaf.size() > 0 && leaf[0] == '/' || leaf[0] == '\\') {
+    if (leaf.size() > 0 && (leaf[0] == '/' || leaf[0] == '\\')) {
         leaf = leaf.substr(1);
     }
     bool wildcards = false;

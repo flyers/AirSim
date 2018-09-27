@@ -10,6 +10,7 @@
 #include "MagnetometerSimpleParams.hpp"
 #include "MagnetometerBase.hpp"
 #include "common/FrequencyLimiter.hpp"
+#include "common/DelayLine.hpp"
 
 
 namespace msr { namespace airlib {
@@ -21,20 +22,41 @@ public:
     {
         noise_vec_ = RandomVectorGaussianR(Vector3r::Zero(), params_.noise_sigma);
         bias_vec_ = RandomVectorR(-params_.noise_bias, params_.noise_bias).next();
+
+        //initialize frequency limiter
+        freq_limiter_.initialize(params_.update_frequency, params_.startup_delay);
+        delay_line_.initialize(params_.update_latency);
     }
 
     //*** Start: UpdatableObject implementation ***//
     virtual void reset() override
     {
+        MagnetometerBase::reset();
+
         //Ground truth is reset before sensors are reset
         updateReference(getGroundTruth());
         noise_vec_.reset();
-        updateOutput(0);
+
+        freq_limiter_.reset();
+        delay_line_.reset();
+
+        delay_line_.push_back(getOutputInternal());
     }
 
-    virtual void update(real_T dt) override
+    virtual void update() override
     {
-        updateOutput(dt);
+        MagnetometerBase::update();
+
+        freq_limiter_.update();
+
+        if (freq_limiter_.isWaitComplete()) { 
+            delay_line_.push_back(getOutputInternal());
+        }
+
+        delay_line_.update();
+
+        if (freq_limiter_.isWaitComplete())
+            setOutput(delay_line_.getOutput());
     }
     //*** End: UpdatableObject implementation ***//
 
@@ -56,9 +78,8 @@ private: //methods
             throw std::invalid_argument("magnetic reference source type is not recognized");
         }
     }
-    void updateOutput(real_T dt)
+    Output getOutputInternal()
     {
-        dt; // avoid warning: unused parameter
         Output output;
         const GroundTruth& ground_truth = getGroundTruth();
 
@@ -66,13 +87,12 @@ private: //methods
             updateReference(ground_truth); 
 
         // Calculate the magnetic field noise.
-        // Calculate the magnetic field noise.
         output.magnetic_field_body = VectorMath::transformToBodyFrame(magnetic_field_true_,
             ground_truth.kinematics->pose.orientation, true) * params_.scale_factor
             + noise_vec_.next()
             + bias_vec_;
 
-        setOutput(output);
+        return output;
     }
 
 private:
@@ -81,6 +101,10 @@ private:
 
     Vector3r magnetic_field_true_;
     MagnetometerSimpleParams params_;
+
+
+    FrequencyLimiter freq_limiter_;
+    DelayLine<Output> delay_line_;
 };
 
 }} //namespace

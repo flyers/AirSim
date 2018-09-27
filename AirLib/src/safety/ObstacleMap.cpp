@@ -3,10 +3,6 @@
 
 //in header only mode, control library is not available
 #ifndef AIRLIB_HEADER_ONLY
-//if using Unreal Build system then include precompiled header file first
-#ifdef AIRLIB_PCH
-#include "AirSim.h"
-#endif
 
 #include <thread>
 #include "safety/ObstacleMap.hpp"
@@ -61,9 +57,9 @@ void ObstacleMap::setBlindspot(int tick, bool blindspot)
 
 ObstacleMap::ObstacleInfo ObstacleMap::hasObstacle_(int from_tick, int to_tick) const
 {
-    //make dure from <= to
+    //make sure from <= to
     if (from_tick > to_tick) {
-        //normalize the ticks so bothe are valid indices
+        //normalize the ticks so both are valid indices
         from_tick = wrap(from_tick);
         to_tick = wrap(to_tick);
         

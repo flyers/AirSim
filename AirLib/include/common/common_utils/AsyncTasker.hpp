@@ -10,9 +10,7 @@
 class AsyncTasker {
 public:
     AsyncTasker(unsigned int thread_count = 4)
-        : threads_(thread_count), error_handler_([](std::exception e) {
-        e; // avoid warning: unused parameter
-    })
+        : threads_(thread_count), error_handler_([](std::exception e) {unused(e);})
     {
     }
 
@@ -28,8 +26,8 @@ public:
         if (iterations == 1)
         {
             threads_.push([=](int i) {
+                unused(i);
                 try {
-                    i; // avoid warning: unused parameter
                     func();
                 }
                 catch (std::exception& e) {
@@ -39,8 +37,8 @@ public:
         }
         else {
             threads_.push([=](int i) {
+                unused(i);
                 try {
-                    i; // avoid warning: unused parameter
                     for (unsigned int itr = 0; itr < iterations; ++itr) {
                         func();
                     }
